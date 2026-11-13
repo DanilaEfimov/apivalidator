@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from typing import Union, List
 from lark import Transformer
-from uritemplate.variable import Operator
 
 import apivalidator.dsl.grammar as grammar
 
@@ -78,7 +77,7 @@ class Comparison:
     """
     Operation=Union[grammar.AllowedComp, grammar.AllowedOperator]
     left: Operand
-    op: Operator
+    op: Operation
     right: Operand
 
 
@@ -130,6 +129,7 @@ class ASTBuilder(Transformer):
         ...
 
     def pred(self, children) -> Pred:
+        ...
 
     def or_expr(self, children) -> OrExpr:
         ...
