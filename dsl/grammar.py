@@ -31,7 +31,7 @@ class AllowedComp(Enum):
     GZ=">"
 
 
-class AllowedFields(Enum):
+class AllowedField(Enum):
     """
     allowed request fields
     """
@@ -41,7 +41,7 @@ class AllowedFields(Enum):
     BODY="body"
 
 
-class AllowedOperators(Enum):
+class AllowedOperator(Enum):
     """
     allowed operations for using with operands
     """
@@ -50,22 +50,19 @@ class AllowedOperators(Enum):
     MATCHES="matches"
 
 
-def generate_lark_grammar(filepath: str = GRAMMAR_FILENAME) -> bool:
+def get_grammar() -> str:
     """
-    generates grammar file for Lark parser initialization
-    avoiding magic strings
-    :param filepath: grammar file name
-    :return: True if file generated successfully, False otherwise
+    :return: actual EBNF grammar strings
     """
-    try:
-        funcs = " | ".join(f'"{f.value}"' for f in AllowedFunc)
-        cmp_ops = " | ".join(f'"{c.value}"' for c in AllowedComp)
-        fields = "\n                        | ".join(f'"{f.value}"' for f in AllowedFields)
-        ops = dict({o: o.value for o in AllowedOperators})
+    funcs = " | ".join(f'"{f.value}"' for f in AllowedFunc)
+    cmp_ops = " | ".join(f'"{c.value}"' for c in AllowedComp)
+    fields = "\n                        | ".join(f'"{f.value}"' for f in AllowedField)
+    ops = dict({o: o.value for o in AllowedOperator})
 
-        with open(filepath, "w") as f:
-            f.write(fr"""
-            rule        = and_expr ;
+    return fr"""
+            rule        = ident , ":=" , pred , {{ "," , pred }} ;
+    
+            pred        = ident , ":" , and_expr ;
 
             OR          = "or" ;
             AND         = "and" ;
@@ -80,23 +77,24 @@ def generate_lark_grammar(filepath: str = GRAMMAR_FILENAME) -> bool:
 
             comparison  = operand
                         | operand , cmp_op , operand
-                        | operand , "{ops[AllowedOperators.IN]}" , list
-                        | operand , "{ops[AllowedOperators.MATCHES]}" , string
-                        | operand , "{ops[AllowedOperators.STARTS_WITH]}" , operand ;
+                        | operand , "{ops[AllowedOperator.IN]}" , list
+                        | operand , "{ops[AllowedOperator.MATCHES]}" , string
+                        | operand , "{ops[AllowedOperator.STARTS_WITH]}" , operand ;
 
             cmp_op      = {cmp_ops} ;
 
             operand     = literal | field | call ;
 
             field       = {fields}
-                        | "{AllowedFields.BODY.value}" , {{ "." , ident }} ;
+                        | "{AllowedField.BODY.value}" , {{ "." , ident }} ;
 
             call        = func , "(" , [operand , {{ "," , operand }}] , ")" ;
             func        = {funcs} ;
 
             list        = "[" , [literal , {{ "," , literal }}] , "]" ;
 
-            literal     = string | number | "true" | "false" ;
+            bool        = "True" | "False" ;
+            literal     = string | number | bool ;
 
             string      = '"' , {{ any_char_except_quote_or_backslash | "\" , any_char }} , '"' ;
             number      = [ "-" ] , digit , {{ digit }} , [ "." , digit , {{ digit }} ] ;
@@ -104,7 +102,25 @@ def generate_lark_grammar(filepath: str = GRAMMAR_FILENAME) -> bool:
 
             (* generated at {datetime.now()}, for details see grammar.py *)
 
-            """)
+            """
+
+
+def generate_lark_grammar(filepath: str = GRAMMAR_FILENAME) -> bool:
+    """
+    generates grammar file for Lark parser initialization
+    avoiding magic strings
+    :param filepath: grammar file name
+    :return: True if file generated successfully, False otherwise
+    """
+    try:
+        with open(filepath, "w") as f:
+            f.write(get_grammar())
         return True
     except Exception as e:
         return False
+
+
+if __name__ == "__main__":
+    print("Grammar:")
+
+    print(get_grammar())
