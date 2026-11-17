@@ -21,7 +21,14 @@ T = TypeVar("T")
 
 class ASTBuilder(Transformer):
     """
+    Lark transformer that builds DSL AST nodes from parse trees.
 
+    Each method corresponds to a grammar rule (see ``grammar.py``) and
+    receives a list of already-transformed children. Methods return the
+    appropriate AST node or raise ``ValueError`` on invalid input.
+
+    Terminal tokens are compared as strings; allowed values come from the
+    enums in ``grammar.py``.
     """
 
     @staticmethod
@@ -80,7 +87,24 @@ class ASTBuilder(Transformer):
 
     @staticmethod
     def rule(children) -> Rule:
-        ...
+        """
+        rule := ident , ":=" , pred , {{ "," , pred }} ;
+        see the actual rules in **grammar.py**
+        :param children: list of subtrees
+        :return: rule model
+        """
+        if len(children) < 3:
+            raise ValueError("not enough tokens to build rule")
+
+        ident_string: str = str(children[0])
+        if not ident_string.isidentifier():
+            raise ValueError(f"name '{ident_string}' is not an identifier")
+
+        if str(children[1]) != ":=":
+            raise ValueError(f"expected ':=', got {str(children[1])}")
+
+        preds: List[Pred] = ASTBuilder._build_separated(children[2:], ",", Pred)
+        return Rule(name=ident_string, predicates=preds)
 
     @staticmethod
     def pred(children) -> Pred:
