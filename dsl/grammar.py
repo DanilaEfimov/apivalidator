@@ -170,3 +170,7 @@ def generate_lark_grammar(filepath: str | Path | None = None) -> bool:
 
 if __name__ == "__main__":
     print(get_grammar())
+
+    choice = input(f"do you want to generate grammar to file '{GRAMMAR_FILENAME}' (yes/no): ").lower()
+    if choice == "y" or choice == "yes":
+        generate_lark_grammar(GRAMMAR_FILENAME)

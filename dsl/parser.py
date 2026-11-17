@@ -1,7 +1,12 @@
-from dataclasses import dataclass
-from typing import TypeVar, Tuple, List, Optional
+"""
+Parses DSL text into AST nodes using a Lark grammar.
 
-from django.contrib.sessions.backends import file
+Public entry point is ``parse``; syntax errors are raised as ``DslSyntaxError``
+with line and column of the offending token.
+"""
+
+from typing import Optional
+
 from lark import (
     Transformer, Lark, UnexpectedInput, UnexpectedCharacters,
     UnexpectedEOF, UnexpectedToken
@@ -9,28 +14,15 @@ from lark import (
 from apivalidator.dsl.dslast import *
 from apivalidator.dsl.grammar import *
 
-import re
 import ast
-
-
-"""
-generalized type annotation
-"""
-T = TypeVar("T")
-
-
-@dataclass(frozen=True)
-class TokenPos:
-    """
-    position of a token
-    """
-    line: int
-    column: int
 
 
 class DslSyntaxError(ValueError):
     """
+    Syntax error of the DSL text.
 
+    Carries the 1-based ``line`` and ``column`` of the offending token
+    (when known) and an optional ``context`` snippet showing where it happened.
     """
 
     def __init__(self, message: str,
@@ -75,29 +67,66 @@ class ASTBuilder(Transformer):
 
     # rules / predicates
 
-    def rule(self, children):
-        raise NotImplementedError
+    @staticmethod
+    def rule(children) -> Rule:
+        """
+        rule: IDENT ":=" pred ("," pred)*
+        :param children: list of values
+        :return: rule node
+        """
+        ident, *preds = children
+        return Rule(name=ident, predicates=tuple(preds))
 
-    def pred(self, children):
-        raise NotImplementedError
+    @staticmethod
+    def pred(children) -> Pred:
+        """
+        pred: IDENT ":" or_expr
+        :param children: list of values
+        :return: predicate node
+        """
+        ident, expr = children
+        return Pred(name=ident, expression=expr)
 
     # logic
 
-    def or_expr(self, children):
-        raise NotImplementedError
+    @staticmethod
+    def or_expr(children):
+        """
+        ?or_expr: and_expr (_OR and_expr)*
+        :param children: list of values
+        :return: or expression node
+        """
+        return OrExpr(expressions=tuple(children))
 
-    def and_expr(self, children):
-        raise NotImplementedError
+    @staticmethod
+    def and_expr(children) -> AndExpr:
+        """
+        ?and_expr: not_expr (_AND not_expr)*
+        :param children: list of values
+        :return: and expression node
+        """
+        return AndExpr(expressions=tuple(children))
 
-    def not_expr(self, children):
-        raise NotImplementedError
+    @staticmethod
+    def not_expr(children) -> NotExpr:
+        """
+        ?not_expr: atom
+         | _NOT not_expr -> negation
+        :param children: a single token
+        :return: not expression node
+        """
+        return NotExpr(expression=children[0])
 
-    def negation(self, children):
-        # alias rule: _NOT not_expr -> negation
-        raise NotImplementedError
-
-    def atom(self, children):
-        raise NotImplementedError
+    @staticmethod
+    def negation(children) -> NotExpr:
+        """
+        alias
+        ?not_expr: atom
+         | _NOT not_expr -> negation
+        :param children: a single token
+        :return: not expression node
+        """
+        return NotExpr(expression=children[0])
 
     # comparisons
 
@@ -116,23 +145,7 @@ class ASTBuilder(Transformer):
         left, op, right = children
         return Comparison(left=left, op=op, right=right)
 
-
-    @staticmethod
-    def cmp_op(children) -> AllowedComp:
-        """
-        CMP_OP: {_alternatives([c.value for c in AllowedComp], word=False)}
-        see the actual rules in **grammar.py**
-        :param children: list of tokens
-        :return: comparison enumeration
-        """
-        return AllowedComp(str(children[0]))
-
     # operands
-
-    @staticmethod
-    def operand(children):
-        # '?operand' usually disappears, but keep it for safety
-        raise NotImplementedError
 
     @staticmethod
     def field(children) -> Field:
@@ -158,17 +171,6 @@ class ASTBuilder(Transformer):
         func, *args = children
         return Call(func=func, args=tuple(args))
 
-    @staticmethod
-    def func(children):
-        """
-        FUNC: {_alternatives([f.value for f in AllowedFunc], word=True)}
-        see the actual rules in **grammar.py**
-        :param children: a single token
-        :return: func node
-        """
-        raw = str(children[0])
-        return Func(func_name=AllowedFunc(raw))
-
     # literals
 
     @staticmethod
@@ -178,7 +180,7 @@ class ASTBuilder(Transformer):
         :param children: list of tokens or literals
         :return: literal list node
         """
-        return ListLit(values=Tuple[Literal](children))
+        return ListLit(values=tuple(children))
 
     @staticmethod
     def string(children) -> String:
@@ -218,14 +220,43 @@ class ASTBuilder(Transformer):
 
     # terminals with word operators
 
-    def IN(self, token):
-        raise NotImplementedError
+    @staticmethod
+    def IDENT(token) -> str:
+        """
+        IDENT: /[A-Za-z_][A-Za-z0-9_]*/
+        :return: string
+        """
+        return str(token)
 
-    def MATCHES(self, token):
-        raise NotImplementedError
+    @staticmethod
+    def CMP_OP(token) -> AllowedComp:
+        """
+        CMP_OP: {_alternatives([c.value for c in AllowedComp], word=False)}
+        see the actual rules in **grammar.py**
+        :param token: a single token
+        :return: comparison enumeration
+        """
+        return AllowedComp(str(token))
 
-    def STARTS_WITH(self, token):
-        raise NotImplementedError
+    @staticmethod
+    def FUNC(token):
+        """
+        FUNC: {_alternatives([f.value for f in AllowedFunc], word=True)}
+        see the actual rules in **grammar.py**
+        :param token: a single token
+        :return: func node
+        """
+        return Func(func_name=AllowedFunc(token))
+
+    def __default_token__(self, token):
+        """
+        catches every untracked token
+        :param token: untracked token
+        :return: processed token
+        """
+        if token.type in AllowedOperator.__members__:
+            return AllowedOperator[token.type]
+        return token
 
 
 _PARSER = Lark(get_grammar(), start="rule", parser="lalr", maybe_placeholders=False)

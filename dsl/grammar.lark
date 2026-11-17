@@ -1,0 +1,50 @@
+// generated from grammar.py, do not edit by hand
+
+rule: IDENT ":=" pred ("," pred)*
+pred: IDENT ":" or_expr
+
+// '?' rules disappear when they have a single child,
+// so 'a' stays a plain comparison and only 'a and b' becomes an and_expr
+?or_expr: and_expr (_OR and_expr)*
+?and_expr: not_expr (_AND not_expr)*
+?not_expr: atom
+         | _NOT not_expr -> negation
+?atom: "(" or_expr ")"
+     | comparison
+
+comparison: operand
+          | operand CMP_OP operand
+          | operand STARTS_WITH operand
+          | operand IN list_lit
+          | operand MATCHES string
+
+?operand: literal | field | call
+
+field: FIELD_NAME
+     | BODY ("." IDENT)*
+call: FUNC "(" (operand ("," operand)*)? ")"
+list_lit: "[" (literal ("," literal)*)? "]"
+
+?literal: string | number | boolean
+string: STRING
+number: NUMBER
+boolean: BOOL
+
+// terminals
+_OR: /(?:or)\b/
+_AND: /(?:and)\b/
+_NOT: /(?:not)\b/
+STARTS_WITH: /(?:starts_with)\b/
+IN: /(?:in)\b/
+MATCHES: /(?:matches)\b/
+CMP_OP: /(?:>=|<=|==|!=|<|>)/
+FUNC: /(?:header|exists|lower|len|int)\b/
+FIELD_NAME: /(?:method|query|path)\b/
+BODY: /(?:body)\b/
+BOOL: /(?:True|False)\b/
+STRING: /"(?:[^"\\]|\\.)*"/
+NUMBER: /-?\d+(?:\.\d+)?/
+IDENT: /[A-Za-z_][A-Za-z0-9_]*/
+
+%import common.WS
+%ignore WS
