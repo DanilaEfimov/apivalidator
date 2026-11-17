@@ -1,3 +1,5 @@
+from typing import TypeVar
+
 from lark import Transformer
 from apivalidator.dsl.ast import *
 from apivalidator.dsl.grammar import *
@@ -9,11 +11,59 @@ in 'isinstance' clause
 """
 _LITERAL_TYPES = (String, Bool, Number)
 
+"""
+type annotation for describing typing params
+"""
+T = TypeVar("T")
+
 
 class ASTBuilder(Transformer):
     """
 
     """
+
+    @staticmethod
+    def _build_list_of(children, t: type[T] | tuple[type[T], ...]) -> List[T]:
+        """
+        trying to build a list of "t"
+        :param children: list of subtrees
+        :param t: type of an item
+        :return: list of "t"
+        """
+        if len(children) < 2:
+            raise ValueError("invalid value for list of literals")
+            # TODO: implement syntax error
+
+        opening_seen = str(children[0]) == "["
+        closing_seen = str(children[-1]) == "]"
+        if not opening_seen or not closing_seen:
+            raise ValueError("missed opening or closing bracket")
+
+        items: List[T] = []
+        waiting_for_comma = False
+
+        for l in children[1:-1]:
+            if str(l) == ",":
+                if not waiting_for_comma:
+                    raise ValueError("unexpected ',' in a list of literals")
+                    # TODO: implement syntax error
+                waiting_for_comma = False
+            elif isinstance(l, t):
+                if waiting_for_comma:
+                    raise ValueError("expected ',' between list elements")
+                    # TODO: implement syntax error
+                items.append(l)
+                waiting_for_comma = True
+            else:
+                raise ValueError(f"Unexpected token '{str(l)}' in a list of literals")
+                # TODO: implement syntax error
+
+        # case [1, ]
+        if items != [] and not waiting_for_comma:
+            raise ValueError("expected literal, gotten ','")
+            # TODO: implement syntax error
+
+        return items
 
     @staticmethod
     def rule(children) -> Rule:
@@ -49,7 +99,25 @@ class ASTBuilder(Transformer):
 
     @staticmethod
     def call(children) -> Call:
-        ...
+        """
+        call := func , "(" , [operand , {{ "," , operand }}] , ")" ;
+        :param children: list of subtrees
+        :return: call model
+        """
+        if len(children) < 3:
+            raise ValueError("not enough tokens for building a call")
+            # TODO: implement syntax error
+
+        func: Func = children[0]
+        if str(children[1]) != "(":
+            raise ValueError("missed opening bracket")
+            # TODO: implement syntax error
+        if str(children[-1] != ")"):
+            raise ValueError("missed closing bracket")
+            # TODO: implement syntax error
+
+        args: List[Operand] = ASTBuilder._build_list_of(children[2:-1], Operand)
+        return Call(func=func, args=args)
 
     @staticmethod
     def func(children) -> Func:
@@ -61,14 +129,14 @@ class ASTBuilder(Transformer):
         """
         if len(children) != 1:
             raise ValueError("name of a function has to be a single word")
-            #TODO: implement syntax error
+            # TODO: implement syntax error
 
         raw: str = "".join([str(t) for t in children])
         if raw in FUNCS:
             return Func(func_name=AllowedFunc(raw))
 
         raise ValueError(f"invalid function name '{raw}'")
-        #TODO: implement syntax error
+        # TODO: implement syntax error
 
     @staticmethod
     def list(children) -> ListLit:
@@ -77,40 +145,8 @@ class ASTBuilder(Transformer):
         :param children: list of subtrees
         :return: list of literals model
         """
-        if len(children) < 2:
-            raise ValueError("invalid value for list of literals")
-            # TODO: implement syntax error
-
-        opening_seen = str(children[0]) == "["
-        closing_seen = str(children[-1]) == "]"
-        if not opening_seen or not closing_seen:
-            raise ValueError("missed opening or closing bracket")
-
-        literals: List[Literal] = []
-        waiting_for_comma = False
-
-        for l in children[1:-1]:
-            if str(l) == ",":
-                if not waiting_for_comma:
-                    raise ValueError("unexpected ',' in a list of literals")
-                    # TODO: implement syntax error
-                waiting_for_comma = False
-            elif isinstance(l, _LITERAL_TYPES):
-                if waiting_for_comma:
-                    raise ValueError("expected ',' between list elements")
-                    # TODO: implement syntax error
-                literals.append(l)
-                waiting_for_comma = True
-            else:
-                raise ValueError(f"Unexpected token '{str(l)}' in a list of literals")
-                # TODO: implement syntax error
-
-        # case [1, ]
-        if literals != [] and not waiting_for_comma:
-            raise ValueError("expected literal, gotten ','")
-            # TODO: implement syntax error
-
-        return ListLit(values=literals)
+        items: List[Literal] = ASTBuilder._build_list_of(children, _LITERAL_TYPES)
+        return ListLit(values=items)
 
     @staticmethod
     def boolean(children) -> Bool:
