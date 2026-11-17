@@ -25,6 +25,41 @@ class ASTBuilder(Transformer):
     """
 
     @staticmethod
+    def _build_separated(children, separator: str, t: type[T] | tuple[type[T], ...]) -> List[T]:
+        """
+        trying to build a list of comma separated values of "t"
+        :param children: list of subtrees
+        :param separator: separator string
+        :param t: type of an item
+        :return: list of "t"
+        """
+        items: List[T] = []
+        waiting_for_sep = False
+
+        for l in children[1:-1]:
+            if str(l) == separator:
+                if not waiting_for_sep:
+                    raise ValueError(f"unexpected '{separator}' in a list of literals")
+                    # TODO: implement syntax error
+                waiting_for_sep = False
+            elif isinstance(l, t):
+                if waiting_for_sep:
+                    raise ValueError(f"expected '{separator}' between list elements")
+                    # TODO: implement syntax error
+                items.append(l)
+                waiting_for_sep = True
+            else:
+                raise ValueError(f"Unexpected token '{str(l)}' in a list of literals")
+                # TODO: implement syntax error
+
+        # case "1, "
+        if items != [] and not waiting_for_sep:
+            raise ValueError(f"expected literal, gotten '{separator}'")
+            # TODO: implement syntax error
+
+        return items
+
+    @staticmethod
     def _build_list_of(children, t: type[T] | tuple[type[T], ...]) -> List[T]:
         """
         trying to build a list of "t"
@@ -41,31 +76,7 @@ class ASTBuilder(Transformer):
         if not opening_seen or not closing_seen:
             raise ValueError("missed opening or closing bracket")
 
-        items: List[T] = []
-        waiting_for_comma = False
-
-        for l in children[1:-1]:
-            if str(l) == ",":
-                if not waiting_for_comma:
-                    raise ValueError("unexpected ',' in a list of literals")
-                    # TODO: implement syntax error
-                waiting_for_comma = False
-            elif isinstance(l, t):
-                if waiting_for_comma:
-                    raise ValueError("expected ',' between list elements")
-                    # TODO: implement syntax error
-                items.append(l)
-                waiting_for_comma = True
-            else:
-                raise ValueError(f"Unexpected token '{str(l)}' in a list of literals")
-                # TODO: implement syntax error
-
-        # case [1, ]
-        if items != [] and not waiting_for_comma:
-            raise ValueError("expected literal, gotten ','")
-            # TODO: implement syntax error
-
-        return items
+        return ASTBuilder._build_separated(children[1:-1], ",", t)
 
     @staticmethod
     def rule(children) -> Rule:
@@ -77,11 +88,25 @@ class ASTBuilder(Transformer):
 
     @staticmethod
     def or_expr(children) -> OrExpr:
-        ...
+        """
+        or_expr := and_expr , {{ "or" , and_expr }} ;
+        see the actual rules in **grammar.py**
+        :param children: list of subtreees
+        :return: or expression model
+        """
+        exprs: List[AndExpr] = ASTBuilder._build_separated(children, LogicOp.AND.value, AndExpr)
+        return OrExpr(expressions=exprs)
 
     @staticmethod
     def and_expr(children) -> AndExpr:
-        ...
+        """
+        and_expr := not_expr , {{ "and" , not_expr }} ;
+        see the actual rules in **grammar.py**
+        :param children: list of subtrees
+        :return: and expression model
+        """
+        exprs: List[NotExpr] = ASTBuilder._build_separated(children, LogicOp.AND.value, NotExpr)
+        return AndExpr(expressions=exprs)
 
     @staticmethod
     def not_expr(children) -> NotExpr:
