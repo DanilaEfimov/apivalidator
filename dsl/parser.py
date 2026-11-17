@@ -1,5 +1,6 @@
 from lark import Transformer
 from apivalidator.dsl.ast import *
+from apivalidator.dsl.grammar import *
 
 """
 due to 'isinstance' constraits we can not use 
@@ -51,8 +52,23 @@ class ASTBuilder(Transformer):
         ...
 
     @staticmethod
-    def func(children) -> grammar.AllowedFunc:
-        ...
+    def func(children) -> Func:
+        """
+        func := "header" | "len" | "exists" | "lower" | "int"
+        see the actual rules in **grammar.py**
+        :param children: list of subtrees
+        :return: function model
+        """
+        if len(children) != 1:
+            raise ValueError("name of a function has to be a single word")
+            #TODO: implement syntax error
+
+        raw: str = "".join([str(t) for t in children])
+        if raw in FUNCS:
+            return Func(func_name=AllowedFunc(raw))
+
+        raise ValueError(f"invalid function name '{raw}'")
+        #TODO: implement syntax error
 
     @staticmethod
     def list(children) -> ListLit:

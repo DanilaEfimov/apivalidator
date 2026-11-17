@@ -59,14 +59,17 @@ class LogicOp(Enum):
     NOT="not"
 
 
+FUNCS = [f'"{f.value}"' for f in AllowedFunc]
+CMD_OPS = [f'"{f.value}"' for f in AllowedComp]
+FIELDS = [f'"{f.value}"' for f in AllowedField]
+OPS = {o: o.value for o in AllowedOperator}
+
+
 def get_grammar() -> str:
     """
     :return: actual EBNF grammar strings
     """
-    funcs = " | ".join(f'"{f.value}"' for f in AllowedFunc)
-    cmp_ops = " | ".join(f'"{c.value}"' for c in AllowedComp)
-    fields = "\n                        | ".join(f'"{f.value}"' for f in AllowedField)
-    ops = dict({o: o.value for o in AllowedOperator})
+    ops = dict(OPS)
 
     return fr"""
             rule        = ident , ":=" , pred , {{ "," , pred }} ;
@@ -91,15 +94,15 @@ def get_grammar() -> str:
                         | operand , "{ops[AllowedOperator.MATCHES]}" , string
                         | operand , "{ops[AllowedOperator.STARTS_WITH]}" , operand ;
 
-            cmp_op      = {cmp_ops} ;
+            cmp_op      = {"|".join(CMD_OPS)} ;
 
             operand     = literal | field | call ;
 
-            field       = {fields}
+            field       = {"|".join(FIELDS)}
                         | "{AllowedField.BODY.value}" , {{ "." , ident }} ;
 
             call        = func , "(" , [operand , {{ "," , operand }}] , ")" ;
-            func        = {funcs} ;
+            func        = {"|".join(FUNCS)} ;
 
             list        = "[" , [literal , {{ "," , literal }}] , "]" ;
 
