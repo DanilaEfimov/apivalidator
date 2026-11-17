@@ -1,139 +1,172 @@
-from datetime import datetime
+import re
 from enum import Enum
+from pathlib import Path
 
 
-GRAMMAR_FILENAME="grammar.lark"
+GRAMMAR_FILENAME = "grammar.lark"
 
 # ---------------------------------------
-# Enums
+# Enums (single source of truth)
 # ---------------------------------------
 
 class AllowedFunc(Enum):
     """
     allowed function names
     """
-    HEADER="header"
-    LEN="len"
-    EXISTS="exists"
-    LOWER="lower"
-    INT="int"
+    HEADER = "header"
+    LEN = "len"
+    EXISTS = "exists"
+    LOWER = "lower"
+    INT = "int"
 
 
 class AllowedComp(Enum):
     """
-    allowed comparision notation
+    allowed comparison notation
     """
-    GE=">="
-    LE="<="
-    EQ="=="
-    NEQ="!="
-    LT="<"
-    GT=">"
+    GE = ">="
+    LE = "<="
+    EQ = "=="
+    NEQ = "!="
+    LT = "<"
+    GT = ">"
 
 
 class AllowedField(Enum):
     """
     allowed request fields
     """
-    METHOD="method"
-    PATH="path"
-    QUERY="query"
-    BODY="body"
+    METHOD = "method"
+    PATH = "path"
+    QUERY = "query"
+    BODY = "body"
 
 
 class AllowedOperator(Enum):
     """
-    allowed operations for using with operands
+    allowed word operators.
+    the member NAME is also the terminal name in the grammar
     """
-    STARTS_WITH="starts_with"
-    IN="in"
-    MATCHES="matches"
+    STARTS_WITH = "starts_with"
+    IN = "in"
+    MATCHES = "matches"
 
 
 class LogicOp(Enum):
     """
     allowed logic operations
+    the member NAME is also the terminal name in the grammar (with a leading '_')
     """
-    OR="or"
-    AND="and"
-    NOT="not"
+    OR = "or"
+    AND = "and"
+    NOT = "not"
 
 
-FUNCS = [f'"{f.value}"' for f in AllowedFunc]
-CMD_OPS = [f'"{f.value}"' for f in AllowedComp]
-FIELDS = [f'"{f.value}"' for f in AllowedField]
-OPS = {o: o.value for o in AllowedOperator}
+# what may stand to the right of each word operator (a grammar rule name).
+# the grammar enforces this, so the transformer does not have to re-check it
+OPERATOR_RHS = {
+    AllowedOperator.IN: "list_lit",
+    AllowedOperator.MATCHES: "string",
+    AllowedOperator.STARTS_WITH: "operand",
+}
+
+_missing = set(AllowedOperator) - set(OPERATOR_RHS)
+if _missing:
+    raise RuntimeError(f"OPERATOR_RHS has no entry for: {sorted(m.name for m in _missing)}")
+
+
+# ---------------------------------------
+# Grammar generation
+# ---------------------------------------
+
+def _alternatives(values, *, word: bool) -> str:
+    """
+    builds a Lark regex terminal that matches any of the values,
+    longest first (so '<=' wins over '<').
+    for words a trailing \\b keeps 'in' from matching the start of 'index'
+    """
+    body = "|".join(re.escape(v) for v in sorted(values, key=len, reverse=True))
+    return f"/(?:{body})\\b/" if word else f"/(?:{body})/"
 
 
 def get_grammar() -> str:
     """
-    :return: actual EBNF grammar strings
+    :return: Lark grammar text, built from the enums above.
+             deterministic: no timestamps, so generated files do not produce noisy diffs
     """
-    ops = dict(OPS)
+    plain_fields = [f.value for f in AllowedField if f is not AllowedField.BODY]
 
-    return fr"""
-            rule        = ident , ":=" , pred , {{ "," , pred }} ;
-    
-            pred        = ident , ":" , and_expr ;
+    word_op_alts = "\n          | ".join(
+        f"operand {op.name} {OPERATOR_RHS[op]}" for op in AllowedOperator
+    )
+    word_op_terminals = "\n".join(
+        f"{op.name}: {_alternatives([op.value], word=True)}" for op in AllowedOperator
+    )
+    logic_terminals = "\n".join(
+        f"_{op.name}: {_alternatives([op.value], word=True)}" for op in LogicOp
+    )
 
-            OR          = "{LogicOp.OR.value}" ;
-            AND         = "{LogicOp.AND.value}" ;
-            NOT         = "{LogicOp.NOT.value}" ;
+    return rf"""// generated from grammar.py, do not edit by hand
 
-            or_expr     = and_expr , {{ OR , and_expr }} ;
-            and_expr    = not_expr , {{ AND , not_expr }} ;
-            not_expr    = atom
-                        | NOT , not_expr ;
-            atom        = "(" , and_expr , ")"
-                        | "(" , or_expr , ")"
-                        | comparison ;
+rule: IDENT ":=" pred ("," pred)*
+pred: IDENT ":" or_expr
 
-            comparison  = operand
-                        | operand , cmp_op , operand
-                        | operand , "{ops[AllowedOperator.IN]}" , list
-                        | operand , "{ops[AllowedOperator.MATCHES]}" , string
-                        | operand , "{ops[AllowedOperator.STARTS_WITH]}" , operand ;
+// '?' rules disappear when they have a single child,
+// so 'a' stays a plain comparison and only 'a and b' becomes an and_expr
+?or_expr: and_expr (_OR and_expr)*
+?and_expr: not_expr (_AND not_expr)*
+?not_expr: atom
+         | _NOT not_expr -> negation
+?atom: "(" or_expr ")"
+     | comparison
 
-            cmp_op      = {"|".join(CMD_OPS)} ;
+comparison: operand
+          | operand CMP_OP operand
+          | {word_op_alts}
 
-            operand     = literal | field | call ;
+?operand: literal | field | call
 
-            field       = {"|".join(FIELDS)}
-                        | "{AllowedField.BODY.value}" , {{ "." , ident }} ;
+field: FIELD_NAME
+     | BODY ("." IDENT)*
+call: FUNC "(" (operand ("," operand)*)? ")"
+list_lit: "[" (literal ("," literal)*)? "]"
 
-            call        = func , "(" , [operand , {{ "," , operand }}] , ")" ;
-            func        = {"|".join(FUNCS)} ;
+?literal: string | number | boolean
+string: STRING
+number: NUMBER
+boolean: BOOL
 
-            list        = "[" , [literal , {{ "," , literal }}] , "]" ;
+// terminals
+{logic_terminals}
+{word_op_terminals}
+CMP_OP: {_alternatives([c.value for c in AllowedComp], word=False)}
+FUNC: {_alternatives([f.value for f in AllowedFunc], word=True)}
+FIELD_NAME: {_alternatives(plain_fields, word=True)}
+BODY: {_alternatives([AllowedField.BODY.value], word=True)}
+BOOL: /(?:True|False)\b/
+STRING: /"(?:[^"\\]|\\.)*"/
+NUMBER: /-?\d+(?:\.\d+)?/
+IDENT: /[A-Za-z_][A-Za-z0-9_]*/
 
-            bool        = "True" | "False" ;
-            literal     = string | number | bool ;
-
-            string      = '"' , {{ any_char_except_quote_or_backslash | "\" , any_char }} , '"' ;
-            number      = [ "-" ] , digit , {{ digit }} , [ "." , digit , {{ digit }} ] ;
-            ident       = ( letter | "_") , {{ letter , digit , "_" }} ;
-
-            (* generated at {datetime.now()}, for details see grammar.py *)
-
-            """
+%import common.WS
+%ignore WS
+"""
 
 
-def generate_lark_grammar(filepath: str = GRAMMAR_FILENAME) -> bool:
+def generate_lark_grammar(filepath: str | Path | None = None) -> bool:
     """
-    generates grammar file for Lark parser initialization
-    avoiding magic strings
-    :param filepath: grammar file name
+    writes the grammar to a file (handy for reading it; the parser itself
+    takes the text straight from get_grammar())
+    :param filepath: target file, by default next to this module
     :return: True if file generated successfully, False otherwise
     """
+    path = Path(filepath) if filepath else Path(__file__).with_name(GRAMMAR_FILENAME)
     try:
-        with open(filepath, "w") as f:
-            f.write(get_grammar())
+        path.write_text(get_grammar(), encoding="utf-8")
         return True
-    except ...:
+    except OSError:
         return False
 
 
 if __name__ == "__main__":
-    print("Grammar:")
-
     print(get_grammar())

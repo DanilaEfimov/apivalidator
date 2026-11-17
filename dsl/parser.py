@@ -1,22 +1,64 @@
-# TODO: replace builtin errors with custom errors
+from dataclasses import dataclass
+from typing import TypeVar, Tuple, List, Optional
 
-from typing import TypeVar
-
-from lark import Transformer
-from apivalidator.dsl.ast import *
+from django.contrib.sessions.backends import file
+from lark import (
+    Transformer, Lark, UnexpectedInput, UnexpectedCharacters,
+    UnexpectedEOF, UnexpectedToken
+)
+from apivalidator.dsl.dslast import *
 from apivalidator.dsl.grammar import *
 
-"""
-due to 'isinstance' constraints we can not use 
-Literal (aka Union[String, Number, Bool]) typing
-in 'isinstance' clause
-"""
-_LITERAL_TYPES = (String, Bool, Number)
+import re
+import ast
+
 
 """
-type annotation for describing typing params
+generalized type annotation
 """
 T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class TokenPos:
+    """
+    position of a token
+    """
+    line: int
+    column: int
+
+
+class DslSyntaxError(ValueError):
+    """
+
+    """
+
+    def __init__(self, message: str,
+                 line: Optional[int]=None,
+                 column: Optional[int]=None,
+                 context: str=""):
+        """
+        :param message: error description
+        :param line: line of the token's pos
+        :param column: column of the token's pos
+        :param context: context of exception
+        """
+        where = f"at line {line}, at column {column}" if line is not None else ""
+        super().__init__(f"{message} {where}" + f"\n{context if context else ''}")
+        self.message = message
+        self.line = line
+        self.column = column
+        self.context = context
+
+
+def is_identifier(s: str) -> bool:
+    """
+    checks the ident grammar rule
+    see the actual rules in **grammar.py**
+    :param s: string
+    :return: True if it's ascii identifier, False otherwise
+    """
+    return re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', s) is not None
 
 
 class ASTBuilder(Transformer):
@@ -31,375 +73,198 @@ class ASTBuilder(Transformer):
     enums in ``grammar.py``.
     """
 
-    @staticmethod
-    def _build_separated(children, separator: str, t: type[T] | tuple[type[T], ...]) -> List[T]:
-        """
-        trying to build a list of comma separated values of "t"
-        :param children: list of subtrees
-        :param separator: separator string
-        :param t: type of an item
-        :return: list of "t"
-        """
-        items: List[T] = []
-        waiting_for_sep = False
+    # rules / predicates
 
-        for l in children[1:-1]:
-            if str(l) == separator:
-                if not waiting_for_sep:
-                    raise ValueError(f"unexpected '{separator}' in a list of {type[t].__name__}")
-                    # TODO: implement syntax error
-                waiting_for_sep = False
-            elif isinstance(l, t):
-                if waiting_for_sep:
-                    raise ValueError(f"expected '{separator}' between list elements")
-                    # TODO: implement syntax error
-                items.append(l)
-                waiting_for_sep = True
-            else:
-                raise ValueError(f"Unexpected token '{str(l)}' in a list of {type[t].__name__}")
-                # TODO: implement syntax error
+    def rule(self, children):
+        raise NotImplementedError
 
-        # case "1, "
-        if items != [] and not waiting_for_sep:
-            raise ValueError(f"expected {type[t].__name__}, gotten '{separator}'")
-            # TODO: implement syntax error
+    def pred(self, children):
+        raise NotImplementedError
 
-        return items
+    # logic
 
-    @staticmethod
-    def _build_list_of(children, t: type[T] | tuple[type[T], ...]) -> List[T]:
-        """
-        trying to build a list of "t"
-        :param children: list of subtrees
-        :param t: type of an item
-        :return: list of "t"
-        """
-        if len(children) < 2:
-            raise ValueError(f"invalid value for list of {type[t].__name__}")
-            # TODO: implement syntax error
+    def or_expr(self, children):
+        raise NotImplementedError
 
-        opening_seen = str(children[0]) == "["
-        closing_seen = str(children[-1]) == "]"
-        if not opening_seen or not closing_seen:
-            raise ValueError("missed opening or closing bracket")
+    def and_expr(self, children):
+        raise NotImplementedError
 
-        return ASTBuilder._build_separated(children[1:-1], ",", t)
+    def not_expr(self, children):
+        raise NotImplementedError
 
-    @staticmethod
-    def rule(children) -> Rule:
-        """
-        rule := ident , ":=" , pred , {{ "," , pred }} ;
-        see the actual rules in **grammar.py**
-        :param children: list of subtrees
-        :return: rule model
-        """
-        if len(children) < 3:
-            raise ValueError("not enough tokens to build rule")
+    def negation(self, children):
+        # alias rule: _NOT not_expr -> negation
+        raise NotImplementedError
 
-        ident_string: str = str(children[0])
-        if not ident_string.isidentifier():
-            raise ValueError(f"name '{ident_string}' is not an identifier")
+    def atom(self, children):
+        raise NotImplementedError
 
-        if str(children[1]) != ":=":
-            raise ValueError(f"expected ':=', got {str(children[1])}")
-
-        preds: List[Pred] = ASTBuilder._build_separated(children[2:], ",", Pred)
-        return Rule(name=ident_string, predicates=preds)
-
-    @staticmethod
-    def pred(children) -> Pred:
-        """
-        pred := ident , ":" , and_expr ;
-        see the actual rules in **grammar.py**
-        :param children: list of subtrees
-        :return: predicate model
-        """
-        if len(children) != 3:
-            raise ValueError(f"invalid predicate: expected 3 children, got {len(children)}")
-
-        ident_string: str = str(children[0])
-        if not ident_string.isidentifier():
-            raise ValueError(f"name '{ident_string}' is not an identifier")
-
-        if str(children[1]) != ":":
-            raise ValueError(f"expected ':', got {str(children[1])}")
-
-        pred = children[2]
-        if not isinstance(pred, AndExpr):
-            raise ValueError(f"expected and-expression, got {type(pred).__name__}")
-
-        return Pred(name=ident_string, expression=pred)
-
-    @staticmethod
-    def or_expr(children) -> OrExpr:
-        """
-        or_expr := and_expr , {{ "or" , and_expr }} ;
-        see the actual rules in **grammar.py**
-        :param children: list of subtrees
-        :return: or expression model
-        """
-        exprs: List[AndExpr] = ASTBuilder._build_separated(children, LogicOp.OR.value, AndExpr)
-        return OrExpr(expressions=exprs)
-
-    @staticmethod
-    def and_expr(children) -> AndExpr:
-        """
-        and_expr := not_expr , {{ "and" , not_expr }} ;
-        see the actual rules in **grammar.py**
-        :param children: list of subtrees
-        :return: and expression model
-        """
-        exprs: List[NotExpr] = ASTBuilder._build_separated(children, LogicOp.AND.value, NotExpr)
-        return AndExpr(expressions=exprs)
-
-    @staticmethod
-    def not_expr(children) -> NotExpr:
-        """
-        not_expr := atom | "not" , not_expr ;
-        see the actual rules in **grammar.py**
-        :param children: list of subtrees
-        :return: not expression model
-        """
-        # atom case
-        if len(children) == 1:
-            if not isinstance(children[0], Atom):
-                raise ValueError(f"expected comparison, got {type(children[0]).__name__}")
-            return NotExpr(expression=children[0])
-
-        # double not case
-        if len(children) != 2:
-            raise ValueError(f"invalid comparison: expected 1 or 2 children, got {len(children)}")
-
-        op = children[0]
-        expr = children[1]
-
-        if LogicOp(str(op)) is not LogicOp.NOT:
-            raise ValueError(f"expected 'not' operation, got {str(op)}")
-
-        # DONT CHANGE GIVEN TYPES HERE BEFORE ast.py
-        if not isinstance(expr, (OrExpr, AndExpr, Comparison)):
-            raise ValueError(f"expected or/and-expression or comparison, got {type(expr).__name__}")
-
-        return NotExpr(expression=expr)
-
-    @staticmethod
-    def atom(children) -> Atom:
-        """
-        atom := "(" , and_expr , ")"
-                | "(" , or_expr , ")"
-                | comparison ;
-        :param children: list of subtrees
-        :return: atom model
-        """
-        # comparison case
-        if len(children) == 1:
-            if not isinstance(children[0], Comparison):
-                raise ValueError(f"expected comparison, got {type(children[0]).__name__}")
-            return Atom(value=children[0])
-
-        # and/or expression case
-        if len(children) != 3:
-            raise ValueError(f"invalid comparison: expected 1 or 3 children, got {len(children)}")
-
-        if str(children[0]) != "(":
-            raise ValueError("missed opening bracket")
-
-        if str(children[-1]) != ")":
-            raise ValueError("missed closing bracket")
-
-        expr = children[1]
-        if not isinstance(expr, AndExpr) and not isinstance(expr, OrExpr):
-            raise ValueError(f"expected or/and-expression, got {type(expr).__name__}")
-
-        return Atom(value=expr)
+    # comparisons
 
     @staticmethod
     def comparison(children) -> Comparison:
         """
-        comparison = operand
-              | operand , cmp_op , operand
-              | operand , "in" , list
-              | operand , "matches" , string
-              | operand , "starts_with" , operand ;
+        comparison: operand
+          | operand CMP_OP operand
+          | {word_op_alts}
         see the actual rules in **grammar.py**
-        :param children: list of subtrees
-        :return: comparison model
+        :param children: list of tokens
+        :return: comparison node
         """
         if len(children) == 1:
-            if not isinstance(children[0], Operand):
-                raise ValueError(f"expected operand, got {type(children[0]).__name__}")
-            return Comparison(left=children[0], op=None, right=None)
+            return Comparison(left=children[0])
+        left, op, right = children
+        return Comparison(left=left, op=op, right=right)
 
-        # binary case (3 children)
-        if len(children) != 3:
-            raise ValueError(f"invalid comparison: expected 1 or 3 children, got {len(children)}")
-
-        left = children[0]
-        op_raw = children[1]
-        right = children[2]
-
-        if not isinstance(left, Operand):
-            raise ValueError(f"expected operand on the left, got {type(left).__name__}")
-
-        # cmp_op: operand , cmp_op , operand
-        if isinstance(op_raw, AllowedComp):
-            if not isinstance(right, Operand):
-                raise ValueError(f"expected operand on the right, got {type(right).__name__}")
-            return Comparison(left=left, op=op_raw, right=right)
-
-        # in: operand , "in" , list
-        if isinstance(op_raw, AllowedOperator) and op_raw is AllowedOperator.IN:
-            if not isinstance(right, ListLit):
-                raise ValueError(f"expected list after 'in', got {type(right).__name__}")
-            return Comparison(left=left, op=op_raw, right=right)
-
-        # matches: operand , "matches" , string
-        if isinstance(op_raw, AllowedOperator) and op_raw is AllowedOperator.MATCHES:
-            if not isinstance(right, String):
-                raise ValueError(f"expected string after 'matches', got {type(right).__name__}")
-            return Comparison(left=left, op=op_raw, right=right)
-
-        # starts_with: operand , "starts_with" , operand
-        if isinstance(op_raw, AllowedOperator) and op_raw is AllowedOperator.STARTS_WITH:
-            if not isinstance(right, Operand):
-                raise ValueError(f"expected operand after 'starts_with', got {type(right).__name__}")
-            return Comparison(left=left, op=op_raw, right=right)
-
-        raise ValueError(f"unknown comparison operator: {op_raw!r}")
 
     @staticmethod
     def cmp_op(children) -> AllowedComp:
         """
-        cmp_op := ">=" | "<=" | "==" | "!=" | "<" | ">" ;
+        CMP_OP: {_alternatives([c.value for c in AllowedComp], word=False)}
+        see the actual rules in **grammar.py**
         :param children: list of tokens
-        :return: allowed comparisons enumeration
+        :return: comparison enumeration
         """
-        if len(children) != 1:
-            raise ValueError("comparison may be built only from a single token")
+        return AllowedComp(str(children[0]))
 
-        code: str = str(children[0])
-        if code not in CMD_OPS:
-            raise ValueError(f"no such comparison '{code}'")
-            # TODO: implement syntax error
+    # operands
 
-        return AllowedComp(code)
+    @staticmethod
+    def operand(children):
+        # '?operand' usually disappears, but keep it for safety
+        raise NotImplementedError
 
     @staticmethod
     def field(children) -> Field:
         """
-        field := "method" | "path" | "query" | "body" | "body" , { "." , ident } ;
-        see the actual rules in **grammar.py**
-        :param children: list of subtrees
-        :return: field model
+        field: FIELD_NAME
+            | BODY ("." IDENT)*
+        :param children: list of tokens
+        :return: field node
         """
-        raw: str = "".join([str(t) for t in children])
-
-        # empty field case
-        if not children:
-            raise ValueError("empty field")
-        # no path case
+        field_name, *path = children
         if len(children) == 1:
-            if raw not in FIELDS:
-                raise ValueError(f"no such field '{raw}'")
-                # TODO: implement syntax error
-            return Field(field_name=AllowedField(raw))
-        # path case
-        else:
-            parts = raw.split(".")
-            if AllowedField(parts[0]) is not AllowedField.BODY:
-                raise ValueError(f"no such path {".".join(parts)}")
-            valid_path = all(part.isidentifier() for part in parts[1:])
-            if not valid_path:
-                raise ValueError(f"path contains non-identifier parts '{".".join(parts)}'")
-                # TODO: implement syntax error
-            return Field(field_name=AllowedField.BODY, path=tuple(parts[1:]))
+            return Field(field_name=AllowedField(str(field_name)))
+
+        return Field(field_name=AllowedField(str(field_name)), path=tuple(path))
 
     @staticmethod
     def call(children) -> Call:
         """
-        call := func , "(" , [operand , {{ "," , operand }}] , ")" ;
-        :param children: list of subtrees
-        :return: call model
-        """
-        if len(children) < 3:
-            raise ValueError("not enough tokens for building a call")
-            # TODO: implement syntax error
-
-        func: Func = children[0]
-        if str(children[1]) != "(":
-            raise ValueError("missed opening bracket")
-            # TODO: implement syntax error
-        if str(children[-1]) != ")":
-            raise ValueError("missed closing bracket")
-            # TODO: implement syntax error
-
-        args: List[Operand] = ASTBuilder._build_list_of(children[2:-1], Operand)
-        return Call(func=func, args=args)
-
-    @staticmethod
-    def func(children) -> Func:
-        """
-        func := "header" | "len" | "exists" | "lower" | "int"
-        see the actual rules in **grammar.py**
-        :param children: list of subtrees
-        :return: function model
-        """
-        if len(children) != 1:
-            raise ValueError("name of a function has to be a single word")
-            # TODO: implement syntax error
-
-        raw: str = "".join([str(t) for t in children])
-        if raw in FUNCS:
-            return Func(func_name=AllowedFunc(raw))
-
-        raise ValueError(f"invalid function name '{raw}'")
-        # TODO: implement syntax error
-
-    @staticmethod
-    def list(children) -> ListLit:
-        """
-        list := "[" , [literal , {{ "," , literal }}] , "]" ;
-        :param children: list of subtrees
-        :return: list of literals model
-        """
-        items: List[Literal] = ASTBuilder._build_list_of(children, _LITERAL_TYPES)
-        return ListLit(values=items)
-
-    @staticmethod
-    def boolean(children) -> Bool:
-        """
-        bool := "True" | "False" ;
+        call: FUNC "(" (operand ("," operand)*)? ")"
         :param children: list of tokens
-        :return: boolean model
+        :return: call node
         """
-        raw = "".join([str(t) for t in children])
-        if raw == "True":
-            return Bool(value=True)
-        elif raw == "False":
-            return Bool(value=False)
-        else:
-            raise ValueError("invalid value for Bool")
-            # TODO: implement syntax error
-            ...
+        func, *args = children
+        return Call(func=func, args=tuple(args))
+
+    @staticmethod
+    def func(children):
+        """
+        FUNC: {_alternatives([f.value for f in AllowedFunc], word=True)}
+        see the actual rules in **grammar.py**
+        :param children: a single token
+        :return: func node
+        """
+        raw = str(children[0])
+        return Func(func_name=AllowedFunc(raw))
+
+    # literals
+
+    @staticmethod
+    def list_lit(children):
+        """
+        list_lit: "[" (literal ("," literal)*)? "]"
+        :param children: list of tokens or literals
+        :return: literal list node
+        """
+        return ListLit(values=Tuple[Literal](children))
 
     @staticmethod
     def string(children) -> String:
         """
-        string := '"' , {{ any_char_except_quote_or_backslash | "\" , any_char }} , '"' ;
-        :param children: list of tokens
+        string: STRING
+        :param children: single token
         :return: string node
         """
-        raw: str = "".join([str(t) for t in children])
-        value = raw.replace("\"", "")
+        token = children[0]
+        raw = str(token)
+        value = ast.literal_eval(raw)
         return String(value=value)
 
     @staticmethod
-    def number(children):
+    def number(children) -> Number:
         """
-        number := [ "-" ] , digit , {{ digit }} , [ "." , digit , {{ digit }} ] ;
-        :param children: list of tokens
+        number: NUMBER
+        :param children: single token
         :return: number node
         """
-        raw: str = "".join([str(t) for t in children])
+        token = children[0]
+        raw = str(token)
         value = float(raw) if "." in raw else int(raw)
         return Number(value=value)
+
+    @staticmethod
+    def boolean(children) -> Bool:
+        """
+        boolean: BOOL
+        :param children: single token
+        :return: boolean node
+        """
+        token = children[0]
+        raw = str(token)
+        value = raw == "True"
+        return Bool(value=value)
+
+    # terminals with word operators
+
+    def IN(self, token):
+        raise NotImplementedError
+
+    def MATCHES(self, token):
+        raise NotImplementedError
+
+    def STARTS_WITH(self, token):
+        raise NotImplementedError
+
+
+_PARSER = Lark(get_grammar(), start="rule", parser="lalr", maybe_placeholders=False)
+
+
+def parse(text: str) -> Rule:
+    """
+    parses DSL text into a Rule
+    :param text: e.g. 'r := p: method == "GET" and len(body.items) > 0'
+    :raises DslSyntaxError: on any syntax error, with line and column
+    """
+    try:
+        tree = _PARSER.parse(text)
+    except UnexpectedInput as e:
+        raise _to_syntax_error(e, text) from None
+    return ASTBuilder().transform(tree)
+
+
+def _to_syntax_error(e: UnexpectedInput, text: str) -> DslSyntaxError:
+    if isinstance(e, UnexpectedEOF):
+        return DslSyntaxError("unexpected end of input", getattr(e, "line", None), getattr(e, "column", None))
+
+    if isinstance(e, UnexpectedToken):
+        found = f"unexpected {str(e.token)!r}"
+        expected = e.accepts or e.expected
+    elif isinstance(e, UnexpectedCharacters):
+        found = f"unexpected character {text[e.pos_in_stream]!r}"
+        expected = e.allowed
+    else:
+        found, expected = "syntax error", None
+
+    if expected:
+        found += f", expected one of: {', '.join(sorted(expected))}"
+    return DslSyntaxError(found, e.line, e.column, e.get_context(text))
+
+
+if __name__ == "__main__":
+    from lark import Lark
+    from apivalidator.dsl.grammar import get_grammar
+
+    parser = Lark(get_grammar(), start="rule", parser="lalr")
+    print(parser.parse('r := p: method in ["GET"]'))

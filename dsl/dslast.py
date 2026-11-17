@@ -1,8 +1,27 @@
 from dataclasses import dataclass
-from typing import Union, List, Optional
+from typing import Union, Tuple, Optional
 
 import apivalidator.dsl.grammar as grammar
 
+__all__ = [
+    "Func",
+    "Number",
+    "String",
+    "Bool",
+    "Field",
+    "Call",
+    "Literal",
+    "Operand",
+    "Operation",
+    "ListLit",
+    "Comparison",
+    "NotExpr",
+    "AndExpr",
+    "OrExpr",
+    "Expr",
+    "Pred",
+    "Rule",
+]
 
 # ---------------------------------------
 # AST nodes
@@ -46,7 +65,7 @@ class Field:
     field access ast node dataclass
     """
     field_name: grammar.AllowedField
-    path: tuple[str, ...] = ()  # body.size
+    path: Tuple[str, ...] = ()  # body.size
 
 
 @dataclass(frozen=True)
@@ -55,7 +74,7 @@ class Call:
     function call ast node dataclass
     """
     func: Func
-    args: List["Operand"]
+    args: Tuple["Operand", ...]
 
 
 Literal = Union[String, Number, Bool]
@@ -68,49 +87,45 @@ class ListLit:
     """
     list literal ast node dataclass
     """
-    values: List[Literal]
+    values: Tuple[Literal, ...]
 
 
 @dataclass(frozen=True)
 class Comparison:
     """
-    comparison predicate ast node dataclass
+    comparison predicate ast node dataclass.
+    a bare operand ('exists(query)') has op=None and right=None
     """
     left: Operand
-    op: Optional[Operation | grammar.AllowedOperator]
-    right: Optional[Union[Operand, ListLit]]    # list required for 'in' syntax
+    op: Optional[Operation] = None
+    right: Optional[Union[Operand, ListLit]] = None    # ListLit for 'in'
 
 
 @dataclass(frozen=True)
 class NotExpr:
     """
-    logical not ast node dataclass
+    logical not ast node dataclass, exists only when there really was a 'not'
     """
-    expression: Union[Comparison, "AndExpr", "OrExpr"]
+    expression: "Expr"
 
 
 @dataclass(frozen=True)
 class AndExpr:
     """
-    logical and ast node dataclass
+    logical and ast node dataclass, always has 2+ operands
     """
-    expressions: List[NotExpr]
+    expressions: Tuple["Expr", ...]
 
 
 @dataclass(frozen=True)
 class OrExpr:
     """
-    logical or ast node dataclass
+    logical or ast node dataclass, always has 2+ operands
     """
-    expressions: List[AndExpr]
+    expressions: Tuple["Expr", ...]
 
 
-@dataclass(frozen=True)
-class Atom:
-    """
-    atom node dataclass
-    """
-    value: Union[AndExpr, OrExpr, Comparison]
+Expr = Union[Comparison, NotExpr, AndExpr, OrExpr]
 
 
 @dataclass(frozen=True)
@@ -119,7 +134,7 @@ class Pred:
     predicate ast node dataclass
     """
     name: str
-    expression: AndExpr
+    expression: Expr
 
 
 @dataclass(frozen=True)
@@ -128,5 +143,4 @@ class Rule:
     rule ast node dataclass
     """
     name: str
-    predicates: List[Pred]
-
+    predicates: Tuple[Pred, ...]
