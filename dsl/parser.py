@@ -84,7 +84,27 @@ class ASTBuilder(Transformer):
 
     @staticmethod
     def pred(children) -> Pred:
-        ...
+        """
+        pred := ident , ":" , and_expr ;
+        see the actual rules in **grammar.py**
+        :param children: list of subtrees
+        :return: predicate model
+        """
+        if len(children) != 3:
+            raise ValueError(f"invalid predicate: expected 3 children, got {len(children)}")
+
+        ident_string: str = str(children[0])
+        if not ident_string.isidentifier():
+            raise ValueError(f"name '{ident_string}' is not an identifier")
+
+        if str(children[1]) != ":":
+            raise ValueError(f"expected ':', got {str(children[1])}")
+
+        pred = children[2]
+        if not isinstance(pred, AndExpr):
+            raise ValueError(f"expected and-expression, got {type(pred).__name__}")
+
+        return Pred(name=ident_string, expression=pred)
 
     @staticmethod
     def or_expr(children) -> OrExpr:
