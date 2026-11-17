@@ -50,6 +50,15 @@ class AllowedOperator(Enum):
     MATCHES="matches"
 
 
+class LogicOp(Enum):
+    """
+    allowed logic operations
+    """
+    OR="or"
+    AND="and"
+    NOT="not"
+
+
 def get_grammar() -> str:
     """
     :return: actual EBNF grammar strings
@@ -64,15 +73,16 @@ def get_grammar() -> str:
     
             pred        = ident , ":" , and_expr ;
 
-            OR          = "or" ;
-            AND         = "and" ;
-            NOT         = "not" ;
+            OR          = "{LogicOp.OR.value}" ;
+            AND         = "{LogicOp.AND.value}" ;
+            NOT         = "{LogicOp.NOT.value}" ;
 
             or_expr     = and_expr , {{ OR , and_expr }} ;
             and_expr    = not_expr , {{ AND , not_expr }} ;
             not_expr    = atom
                         | NOT , not_expr ;
             atom        = "(" , and_expr , ")"
+                        | "(" , or_expr , ")"
                         | comparison ;
 
             comparison  = operand

@@ -1,6 +1,5 @@
 from dataclasses import dataclass
-from typing import Union, List
-from lark import Transformer
+from typing import Union, List, Optional
 
 import apivalidator.dsl.grammar as grammar
 
@@ -47,6 +46,7 @@ class Field:
     field access ast node dataclass
     """
     field_name: grammar.AllowedField
+    path: tuple[str, ...] = ()  # body.size
 
 
 @dataclass(frozen=True)
@@ -55,11 +55,12 @@ class Call:
     function call ast node dataclass
     """
     func: Func
-    args: List[str]
+    args: List["Operand"]
 
 
 Literal = Union[String, Number, Bool]
-Operand = Union[Literal, grammar.AllowedField, Call]
+Operand = Union[Literal, Field, Call]
+Operation = Union[grammar.AllowedComp, grammar.AllowedOperator]
 
 
 @dataclass(frozen=True)
@@ -75,10 +76,9 @@ class Comparison:
     """
     comparison predicate ast node dataclass
     """
-    Operation=Union[grammar.AllowedComp, grammar.AllowedOperator]
     left: Operand
-    op: Operation
-    right: Operand
+    op: Optional[Operation]
+    right: Optional[Union[Operand, ListLit]]    # list required for 'in' syntax
 
 
 @dataclass(frozen=True)
@@ -86,7 +86,7 @@ class NotExpr:
     """
     logical not ast node dataclass
     """
-    ...
+    expression: Union[Comparison, "AndExpr", "OrExpr"]
 
 
 @dataclass(frozen=True)
@@ -122,44 +122,3 @@ class Rule:
     name: str
     predicates: List[Pred]
 
-
-class ASTBuilder(Transformer):
-
-    def rule(self, children) -> Rule:
-        ...
-
-    def pred(self, children) -> Pred:
-        ...
-
-    def or_expr(self, children) -> OrExpr:
-        ...
-
-    def and_expr(self, children) -> AndExpr:
-        ...
-
-    def not_expr(self, children) -> NotExpr:
-        ...
-
-    def comparison(self, children) -> Comparison:
-        ...
-
-    def cmp_op(self, children):
-        ...
-
-    def field(self, children):
-        ...
-
-    def call(self, children):
-        ...
-
-    def func(self, children):
-        ...
-
-    def list(self, children):
-        ...
-
-    def string(self, children):
-        ...
-
-    def number(self, children):
-        ...
