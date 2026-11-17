@@ -21,14 +21,14 @@ class AllowedFunc(Enum):
 
 class AllowedComp(Enum):
     """
-    allowed comparation notation
+    allowed comparision notation
     """
     GE=">="
     LE="<="
     EQ="=="
     NEQ="!="
-    LZ="<"
-    GZ=">"
+    LT="<"
+    GT=">"
 
 
 class AllowedField(Enum):
@@ -129,7 +129,7 @@ def generate_lark_grammar(filepath: str = GRAMMAR_FILENAME) -> bool:
         with open(filepath, "w") as f:
             f.write(get_grammar())
         return True
-    except Exception as e:
+    except ...:
         return False
 
 

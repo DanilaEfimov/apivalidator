@@ -7,7 +7,7 @@ from apivalidator.dsl.ast import *
 from apivalidator.dsl.grammar import *
 
 """
-due to 'isinstance' constraits we can not use 
+due to 'isinstance' constraints we can not use 
 Literal (aka Union[String, Number, Bool]) typing
 in 'isinstance' clause
 """
@@ -46,7 +46,7 @@ class ASTBuilder(Transformer):
         for l in children[1:-1]:
             if str(l) == separator:
                 if not waiting_for_sep:
-                    raise ValueError(f"unexpected '{separator}' in a list of literals")
+                    raise ValueError(f"unexpected '{separator}' in a list of {type[t].__name__}")
                     # TODO: implement syntax error
                 waiting_for_sep = False
             elif isinstance(l, t):
@@ -56,12 +56,12 @@ class ASTBuilder(Transformer):
                 items.append(l)
                 waiting_for_sep = True
             else:
-                raise ValueError(f"Unexpected token '{str(l)}' in a list of literals")
+                raise ValueError(f"Unexpected token '{str(l)}' in a list of {type[t].__name__}")
                 # TODO: implement syntax error
 
         # case "1, "
         if items != [] and not waiting_for_sep:
-            raise ValueError(f"expected literal, gotten '{separator}'")
+            raise ValueError(f"expected {type[t].__name__}, gotten '{separator}'")
             # TODO: implement syntax error
 
         return items
@@ -75,7 +75,7 @@ class ASTBuilder(Transformer):
         :return: list of "t"
         """
         if len(children) < 2:
-            raise ValueError("invalid value for list of literals")
+            raise ValueError(f"invalid value for list of {type[t].__name__}")
             # TODO: implement syntax error
 
         opening_seen = str(children[0]) == "["
@@ -135,10 +135,10 @@ class ASTBuilder(Transformer):
         """
         or_expr := and_expr , {{ "or" , and_expr }} ;
         see the actual rules in **grammar.py**
-        :param children: list of subtreees
+        :param children: list of subtrees
         :return: or expression model
         """
-        exprs: List[AndExpr] = ASTBuilder._build_separated(children, LogicOp.AND.value, AndExpr)
+        exprs: List[AndExpr] = ASTBuilder._build_separated(children, LogicOp.OR.value, AndExpr)
         return OrExpr(expressions=exprs)
 
     @staticmethod
@@ -329,7 +329,7 @@ class ASTBuilder(Transformer):
         if str(children[1]) != "(":
             raise ValueError("missed opening bracket")
             # TODO: implement syntax error
-        if str(children[-1] != ")"):
+        if str(children[-1]) != ")":
             raise ValueError("missed closing bracket")
             # TODO: implement syntax error
 
@@ -370,12 +370,12 @@ class ASTBuilder(Transformer):
         """
         bool := "True" | "False" ;
         :param children: list of tokens
-        :return: bolean model
+        :return: boolean model
         """
         raw = "".join([str(t) for t in children])
         if raw == "True":
             return Bool(value=True)
-        elif raw == "Flase":
+        elif raw == "False":
             return Bool(value=False)
         else:
             raise ValueError("invalid value for Bool")
