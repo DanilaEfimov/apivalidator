@@ -1,6 +1,7 @@
+# TODO: replace builtin errors with custom errors
+
 from typing import TypeVar
 
-from django.contrib.admin.templatetags.admin_list import change_list_object_tools_tag
 from lark import Transformer
 from apivalidator.dsl.ast import *
 from apivalidator.dsl.grammar import *
@@ -84,7 +85,64 @@ class ASTBuilder(Transformer):
 
     @staticmethod
     def not_expr(children) -> NotExpr:
-        ...
+        """
+        not_expr := atom | "not" , not_expr ;
+        see the actual rules in **grammar.py**
+        :param children: list of subtrees
+        :return: not expression model
+        """
+        # atom case
+        if len(children) == 1:
+            if not isinstance(children[0], Atom):
+                raise ValueError(f"expected comparison, got {type(children[0]).__name__}")
+            return NotExpr(expression=children[0])
+
+        # double not case
+        if len(children) != 2:
+            raise ValueError(f"invalid comparison: expected 1 or 2 children, got {len(children)}")
+
+        op = children[0]
+        expr = children[1]
+
+        if LogicOp(str(op)) is not LogicOp.NOT:
+            raise ValueError(f"expected 'not' operation, got {str(op)}")
+
+        # DONT CHANGE GIVEN TYPES HERE BEFORE ast.py
+        if not isinstance(expr, (OrExpr, AndExpr, Comparison)):
+            raise ValueError(f"expected or/and-expression or comparison, got {type(expr).__name__}")
+
+        return NotExpr(expression=expr)
+
+    @staticmethod
+    def atom(children) -> Atom:
+        """
+        atom := "(" , and_expr , ")"
+                | "(" , or_expr , ")"
+                | comparison ;
+        :param children: list of subtrees
+        :return: atom model
+        """
+        # comparison case
+        if len(children) == 1:
+            if not isinstance(children[0], Comparison):
+                raise ValueError(f"expected comparison, got {type(children[0]).__name__}")
+            return Atom(value=children[0])
+
+        # and/or expression case
+        if len(children) != 3:
+            raise ValueError(f"invalid comparison: expected 1 or 3 children, got {len(children)}")
+
+        if str(children[0]) != "(":
+            raise ValueError("missed opening bracket")
+
+        if str(children[-1]) != ")":
+            raise ValueError("missed closing bracket")
+
+        expr = children[1]
+        if not isinstance(expr, AndExpr) and not isinstance(expr, OrExpr):
+            raise ValueError(f"expected or/and-expression, got {type(expr).__name__}")
+
+        return Atom(value=expr)
 
     @staticmethod
     def comparison(children) -> Comparison:

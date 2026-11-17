@@ -106,6 +106,14 @@ class OrExpr:
 
 
 @dataclass(frozen=True)
+class Atom:
+    """
+    atom node dataclass
+    """
+    value: Union[AndExpr, OrExpr, Comparison]
+
+
+@dataclass(frozen=True)
 class Pred:
     """
     predicate ast node dataclass
