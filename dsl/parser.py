@@ -7,41 +7,85 @@ class ASTBuilder(Transformer):
 
     """
 
-    def rule(self, children) -> Rule:
+    @staticmethod
+    def rule(children) -> Rule:
         ...
 
-    def pred(self, children) -> Pred:
+    @staticmethod
+    def pred(children) -> Pred:
         ...
 
-    def or_expr(self, children) -> OrExpr:
+    @staticmethod
+    def or_expr(children) -> OrExpr:
         ...
 
-    def and_expr(self, children) -> AndExpr:
+    @staticmethod
+    def and_expr(children) -> AndExpr:
         ...
 
-    def not_expr(self, children) -> NotExpr:
+    @staticmethod
+    def not_expr(children) -> NotExpr:
         ...
 
-    def comparison(self, children) -> Comparison:
+    @staticmethod
+    def comparison(children) -> Comparison:
         ...
 
-    def cmp_op(self, children) -> grammar.AllowedComp:
+    @staticmethod
+    def cmp_op(children) -> grammar.AllowedComp:
         ...
 
-    def field(self, children) -> grammar.AllowedField:
+    @staticmethod
+    def field(children) -> grammar.AllowedField:
         ...
 
-    def call(self, children) -> Call:
+    @staticmethod
+    def call(children) -> Call:
         ...
 
-    def func(self, children) -> grammar.AllowedFunc:
+    @staticmethod
+    def func(children) -> grammar.AllowedFunc:
         ...
 
-    def list(self, children):
+    @staticmethod
+    def list(children) -> ListLit:
         ...
 
-    def string(self, children):
-        ...
+    @staticmethod
+    def boolean(children) -> Bool:
+        """
+        bool := "True" | "False" ;
+        :param children: list of tokens
+        :return: bolean model
+        """
+        raw = "".join([str(t) for t in children])
+        if raw == "True":
+            return Bool(value=True)
+        elif raw == "Flase":
+            return Bool(value=False)
+        else:
+            raise ValueError("invalid value for Bool")
+            #TODO: implement syntax error
+            ...
 
-    def number(self, children):
-        ...
+    @staticmethod
+    def string(children) -> String:
+        """
+        string := '"' , {{ any_char_except_quote_or_backslash | "\" , any_char }} , '"' ;
+        :param children: list of tokens
+        :return: string node
+        """
+        raw: str = "".join([str(t) for t in children])
+        value = raw.replace("\"", "")
+        return String(value=value)
+
+    @staticmethod
+    def number(children):
+        """
+        number := [ "-" ] , digit , {{ digit }} , [ "." , digit , {{ digit }} ] ;
+        :param children: list of tokens
+        :return: number node
+        """
+        raw: str = "".join([str(t) for t in children])
+        value = float(raw) if "." in raw else int(raw)
+        return Number(value=value)
