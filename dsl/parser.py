@@ -94,8 +94,34 @@ class ASTBuilder(Transformer):
         ...
 
     @staticmethod
-    def field(children) -> grammar.AllowedField:
-        ...
+    def field(children) -> Field:
+        """
+        field := "method" | "path" | "query" | "body" | "body" , { "." , ident } ;
+        see the actual rules in **grammar.py**
+        :param children: list of subtrees
+        :return: field model
+        """
+        raw: str = "".join([str(t) for t in children])
+
+        # empty field case
+        if not children:
+            raise ValueError("empty field")
+        # no path case
+        if len(children) == 1:
+            if raw not in FIELDS:
+                raise ValueError(f"no such field '{raw}'")
+                #TODO: implement syntax error
+            return Field(field_name=AllowedField(raw))
+        # path case
+        else:
+            parts = raw.split(".")
+            if AllowedField(parts[0]) is not AllowedField.BODY:
+                raise ValueError(f"no such path {".".join(parts)}")
+            valid_path = all(part.isidentifier() for part in parts[1:])
+            if not valid_path:
+                raise ValueError(f"path contains non-identifier parts '{".".join(parts[])}'")
+                #TODO: implement syntax error
+            return Field(field_name=AllowedField.BODY, path=tuple(parts[1:]))
 
     @staticmethod
     def call(children) -> Call:
