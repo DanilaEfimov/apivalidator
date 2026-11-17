@@ -1,6 +1,13 @@
 from lark import Transformer
 from apivalidator.dsl.ast import *
 
+"""
+due to 'isinstance' constraits we can not use 
+Literal (aka Union[String, Number, Bool]) typing
+in 'isinstance' clause
+"""
+_LITERAL_TYPES = (String, Bool, Number)
+
 
 class ASTBuilder(Transformer):
     """
@@ -49,7 +56,45 @@ class ASTBuilder(Transformer):
 
     @staticmethod
     def list(children) -> ListLit:
-        ...
+        """
+        list := "[" , [literal , {{ "," , literal }}] , "]" ;
+        :param children: list of subtrees
+        :return: list of literals model
+        """
+        if len(children) < 2:
+            raise ValueError("invalid value for list of literals")
+            # TODO: implement syntax error
+
+        opening_seen = str(children[0]) == "["
+        closing_seen = str(children[-1]) == "]"
+        if not opening_seen or not closing_seen:
+            raise ValueError("missed opening or closing bracket")
+
+        literals: List[Literal] = []
+        waiting_for_comma = False
+
+        for l in children[1:-1]:
+            if str(l) == ",":
+                if not waiting_for_comma:
+                    raise ValueError("unexpected ',' in a list of literals")
+                    # TODO: implement syntax error
+                waiting_for_comma = False
+            elif isinstance(l, _LITERAL_TYPES):
+                if waiting_for_comma:
+                    raise ValueError("expected ',' between list elements")
+                    # TODO: implement syntax error
+                literals.append(l)
+                waiting_for_comma = True
+            else:
+                raise ValueError(f"Unexpected token '{str(l)}' in a list of literals")
+                # TODO: implement syntax error
+
+        # case [1, ]
+        if literals != [] and not waiting_for_comma:
+            raise ValueError("expected literal, gotten ','")
+            # TODO: implement syntax error
+
+        return ListLit(values=literals)
 
     @staticmethod
     def boolean(children) -> Bool:
@@ -65,7 +110,7 @@ class ASTBuilder(Transformer):
             return Bool(value=False)
         else:
             raise ValueError("invalid value for Bool")
-            #TODO: implement syntax error
+            # TODO: implement syntax error
             ...
 
     @staticmethod
