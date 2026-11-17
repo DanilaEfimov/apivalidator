@@ -1,5 +1,6 @@
 from typing import TypeVar
 
+from django.contrib.admin.templatetags.admin_list import change_list_object_tools_tag
 from lark import Transformer
 from apivalidator.dsl.ast import *
 from apivalidator.dsl.grammar import *
@@ -87,11 +88,74 @@ class ASTBuilder(Transformer):
 
     @staticmethod
     def comparison(children) -> Comparison:
-        ...
+        """
+        comparison = operand
+              | operand , cmp_op , operand
+              | operand , "in" , list
+              | operand , "matches" , string
+              | operand , "starts_with" , operand ;
+        see the actual rules in **grammar.py**
+        :param children: list of subtrees
+        :return: comparison model
+        """
+        if len(children) == 1:
+            if not isinstance(children[0], Operand):
+                raise ValueError(f"expected operand, got {type(children[0]).__name__}")
+            return Comparison(left=children[0], op=None, right=None)
+
+        # binary case (3 children)
+        if len(children) != 3:
+            raise ValueError(f"invalid comparison: expected 1 or 3 children, got {len(children)}")
+
+        left = children[0]
+        op_raw = children[1]
+        right = children[2]
+
+        if not isinstance(left, Operand):
+            raise ValueError(f"expected operand on the left, got {type(left).__name__}")
+
+        # cmp_op: operand , cmp_op , operand
+        if isinstance(op_raw, AllowedComp):
+            if not isinstance(right, Operand):
+                raise ValueError(f"expected operand on the right, got {type(right).__name__}")
+            return Comparison(left=left, op=op_raw, right=right)
+
+        # in: operand , "in" , list
+        if isinstance(op_raw, AllowedOperator) and op_raw is AllowedOperator.IN:
+            if not isinstance(right, ListLit):
+                raise ValueError(f"expected list after 'in', got {type(right).__name__}")
+            return Comparison(left=left, op=op_raw, right=right)
+
+        # matches: operand , "matches" , string
+        if isinstance(op_raw, AllowedOperator) and op_raw is AllowedOperator.MATCHES:
+            if not isinstance(right, String):
+                raise ValueError(f"expected string after 'matches', got {type(right).__name__}")
+            return Comparison(left=left, op=op_raw, right=right)
+
+        # starts_with: operand , "starts_with" , operand
+        if isinstance(op_raw, AllowedOperator) and op_raw is AllowedOperator.STARTS_WITH:
+            if not isinstance(right, Operand):
+                raise ValueError(f"expected operand after 'starts_with', got {type(right).__name__}")
+            return Comparison(left=left, op=op_raw, right=right)
+
+        raise ValueError(f"unknown comparison operator: {op_raw!r}")
 
     @staticmethod
-    def cmp_op(children) -> grammar.AllowedComp:
-        ...
+    def cmp_op(children) -> AllowedComp:
+        """
+        cmp_op := ">=" | "<=" | "==" | "!=" | "<" | ">" ;
+        :param children: list of tokens
+        :return: allowed comparisons enumeration
+        """
+        if len(children) != 1:
+            raise ValueError("comparison may be built only from a single token")
+
+        code: str = str(children[0])
+        if code not in CMD_OPS:
+            raise ValueError(f"no such comparison '{code}'")
+            # TODO: implement syntax error
+
+        return AllowedComp(code)
 
     @staticmethod
     def field(children) -> Field:
@@ -110,7 +174,7 @@ class ASTBuilder(Transformer):
         if len(children) == 1:
             if raw not in FIELDS:
                 raise ValueError(f"no such field '{raw}'")
-                #TODO: implement syntax error
+                # TODO: implement syntax error
             return Field(field_name=AllowedField(raw))
         # path case
         else:
@@ -119,8 +183,8 @@ class ASTBuilder(Transformer):
                 raise ValueError(f"no such path {".".join(parts)}")
             valid_path = all(part.isidentifier() for part in parts[1:])
             if not valid_path:
-                raise ValueError(f"path contains non-identifier parts '{".".join(parts[])}'")
-                #TODO: implement syntax error
+                raise ValueError(f"path contains non-identifier parts '{".".join(parts)}'")
+                # TODO: implement syntax error
             return Field(field_name=AllowedField.BODY, path=tuple(parts[1:]))
 
     @staticmethod

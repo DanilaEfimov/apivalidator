@@ -77,7 +77,7 @@ class Comparison:
     comparison predicate ast node dataclass
     """
     left: Operand
-    op: Optional[Operation]
+    op: Optional[Operation | grammar.AllowedOperator]
     right: Optional[Union[Operand, ListLit]]    # list required for 'in' syntax
 
 
