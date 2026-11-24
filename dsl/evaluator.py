@@ -7,7 +7,8 @@ from grammar import AllowedComp, AllowedOperator, AllowedFunc
 @dataclass(frozen=True)
 class Request:
     """
-
+    the http request the rules are checked against.
+    immutable, so one request can be safely reused across rules and predicates
     """
     #TODO: implement HTTP request fields
     d: Dict[str, Any]
@@ -16,15 +17,17 @@ class Request:
 @dataclass
 class Verdict:
     """
-
+    result of evaluating an expression, predicate or rule
     """
     satisfied: bool
-    what: List[str] | None = None
+    what: List[str] | None = None  # human-readable reasons of failure, None if there is nothing to report
 
 
 class DslComparisonError(ValueError):
     """
-
+    semantic error while evaluating a comparison
+    (for example an operand of an unexpected type).
+    optionally carries the rule and the predicate where it happened
     """
 
     def __init__(self, message: str,
@@ -32,10 +35,10 @@ class DslComparisonError(ValueError):
                  rule: Optional[str]=None,
                  context: str=""):
         """
-        :param message:
-        :param pred:
-        :param rule:
-        :param context:
+        :param message: error description
+        :param pred: name of the predicate where the error happened
+        :param rule: name of the rule where the error happened
+        :param context: extra context shown on a new line after the message
         """
         if rule is not None:
             where = f"(rule: {rule}"
@@ -54,7 +57,9 @@ class DslComparisonError(ValueError):
 
 class DslCallError(ValueError):
     """
-
+    error while calling a DSL function
+    (unknown function, wrong number or type of arguments).
+    optionally carries what was expected and what was actually given
     """
 
     def __init__(self, message: str,
@@ -62,10 +67,10 @@ class DslCallError(ValueError):
                  given: str | None = None,
                  context: str = ""):
         """
-        :param message:
-        :param expected:
-        :param given:
-        :param context:
+        :param message: error description
+        :param expected: what the function expects, e.g. 'one string argument'
+        :param given: what the function actually received
+        :param context: extra context shown on a new line after the message
         """
         details = []
         if expected is not None:
@@ -85,76 +90,84 @@ class DslCallError(ValueError):
         self.given = given
         self.context = context
 
+# any value an operand can be resolved to: a literal node, a list literal or a dict (e.g. a part of the body)
 _VALUE = Union[Literal, ListLit, Dict]
 
 class Caller:
     """
-
+    implementations of the DSL functions (see AllowedFunc in grammar.py).
+    each method receives the raw, not yet resolved argument nodes and the request,
+    and returns the resulting value.
+    the grammar does not check arity or argument types, so every method
+    has to validate its arguments itself and raise DslCallError on a mismatch
     """
 
     def call_lower(self, args: Tuple[Operand, ...], req: Request) -> _VALUE:
         """
-
-        :param args:
-        :param req:
-        :return:
+        lower(x): the string x converted to lower case
+        :param args: exactly one argument, which must resolve to a string
+        :param req: request being checked
+        :return: lower-cased string
         """
         ...
 
     def call_len(self, args: Tuple[Operand, ...], req: Request) -> _VALUE:
         """
-
-        :param args:
-        :param req:
-        :return:
+        len(x): the length of x
+        :param args: exactly one argument, which must resolve to a sized value (string, list, dict)
+        :param req: request being checked
+        :return: the length as a number
         """
         ...
 
     def call_exists(self, args: Tuple[Operand, ...], req: Request) -> _VALUE:
         """
-
-        :param args:
-        :param req:
-        :return:
+        exists(x): checks that x is present in the request
+        :param args: exactly one argument (usually a field or a header call)
+        :param req: request being checked
+        :return: boolean literal, True if the value is present
         """
         ...
 
     def call_int(self, args: Tuple[Operand, ...], req: Request) -> _VALUE:
         """
-
-        :param args:
-        :param req:
-        :return:
+        int(x): the value x converted to an integer
+        :param args: exactly one argument, which must be convertible to int
+        :param req: request being checked
+        :return: the integer as a number
         """
         ...
 
     def call_header(self, args: Tuple[Operand, ...], req: Request) -> _VALUE:
         """
-
-        :param args:
-        :param req:
-        :return:
+        header(name): the value of the request header with the given name
+        :param args: exactly one argument, the header name as a string
+        :param req: request being checked
+        :return: header value, or whatever the DSL uses for an absent header
         """
         ...
 
 
 class Resolver:
     """
-
+    turns operands (literals, fields, calls) into values
+    and applies comparison operators to them
     """
 
     def __init__(self):
         """
-
+        initialize self, creates the caller that implements the DSL functions
         """
         self.caller = Caller()
 
     def resolve_unary(self, comp: Comparison, req: Request) -> _VALUE:
         """
-
-        :param comp:
-        :param req:
-        :return:
+        resolves a comparison that consists of a single operand (op is None),
+        e.g. 'exists(query)'. dispatches on the operand kind
+        :param comp: comparison node, only comp.left is used
+        :param req: request being checked
+        :return: the resolved value of the operand
+        :raises DslComparisonError: if the operand is of an unknown kind
         """
         l = comp.left
         if isinstance(l, Field):
@@ -168,10 +181,12 @@ class Resolver:
 
     def resolve_call(self, call: Call, req: Request) -> _VALUE:
         """
-
-        :param call:
-        :param req:
-        :return:
+        resolves a function call by dispatching on the function name
+        to the matching method of the caller
+        :param call: call node
+        :param req: request being checked
+        :return: the value returned by the function
+        :raises DslCallError: if the function has no implementation
         """
         func = call.func.func_name
         caller = self.caller
@@ -191,28 +206,33 @@ class Resolver:
 
     def resolve_literal(self, lit: Literal, req: Request) -> _VALUE:
         """
-
-        :param lit:
-        :param req:
-        :return:
+        resolves a literal (string, number or bool).
+        a literal does not depend on the request
+        :param lit: literal node
+        :param req: request being checked (unused for literals)
+        :return: the literal value
         """
         ...
 
     def resolve_field(self, field: Field, req: Request) -> _VALUE:
         """
-
-        :param field:
-        :param req:
-        :return:
+        resolves access to a request field (method, path, query, body),
+        including a nested path for the body, e.g. 'body.user.name'
+        :param field: field node with its optional path
+        :param req: request being checked
+        :return: the value of the field taken from the request
         """
         ...
 
     def resolve_binary(self, comp: Comparison, req: Request) -> Verdict:
         """
-
-        :param comp:
-        :param req:
-        :return:
+        resolves a comparison with an operator (op is not None).
+        symbol comparisons (>=, ==, ...) go to compare(),
+        word operators (starts_with, in, matches) go to operate()
+        :param comp: comparison node with left, op and right
+        :param req: request being checked
+        :return: verdict of the comparison
+        :raises DslComparisonError: if the operator is of an unknown kind
         """
         op = comp.op
         if isinstance(op, AllowedComp):
@@ -224,37 +244,47 @@ class Resolver:
 
     def compare(self, comp: Comparison, req: Request) -> Verdict:
         """
-
-        :param comp:
-        :param req:
-        :return:
+        applies a symbol comparison (>=, <=, ==, !=, <, >):
+        resolves both sides and compares the values
+        :param comp: comparison node, comp.op is an AllowedComp
+        :param req: request being checked
+        :return: verdict of the comparison
         """
         ...
 
     def operate(self, comp: Comparison, req: Request) -> Verdict:
         """
-
-        :param comp:
-        :param req:
-        :return:
+        applies a word operator:
+        - starts_with: left starts with the right operand
+        - in: left is one of the values of the right list literal
+        - matches: left matches the regular expression in the right string
+        :param comp: comparison node, comp.op is an AllowedOperator
+        :param req: request being checked
+        :return: verdict of the operation
         """
         ...
 
 
 class Evaluator:
     """
-
+    evaluates a parsed rule against a request.
+    walks the expression tree (not / and / or / comparison) and
+    collects the verdicts of its parts
     """
 
     def __init__(self):
+        """
+        initialize self, creates the resolver that computes operands and comparisons
+        """
         self.resolver = Resolver()
 
     def not_expr(self, expr: NotExpr, req: Request) -> Verdict:
         """
-
-        :param expr:
-        :param req:
-        :return:
+        logical not: evaluates the inner expression and inverts its verdict.
+        note: 'what' of the inner verdict is kept as is
+        :param expr: not node
+        :param req: request being checked
+        :return: inverted verdict
         """
         verdict = self.resolve_expression(expr.expression, req)
         verdict.satisfied = not verdict.satisfied
@@ -262,10 +292,12 @@ class Evaluator:
 
     def and_expr(self, expr: AndExpr, req: Request) -> Verdict:
         """
-
-        :param expr:
-        :param req:
-        :return:
+        logical and: satisfied only if all operands are satisfied.
+        every operand is evaluated (no short-circuit), so 'what'
+        gathers the reasons from all unsatisfied operands
+        :param expr: and node with 2+ operands
+        :param req: request being checked
+        :return: combined verdict
         """
         v = Verdict(satisfied=True, what=[])
         for e in expr.expressions:
@@ -277,10 +309,12 @@ class Evaluator:
 
     def or_expr(self, expr: OrExpr, req: Request) -> Verdict:
         """
-
-        :param expr:
-        :param req:
-        :return:
+        logical or: satisfied if at least one operand is satisfied.
+        every operand is evaluated (no short-circuit),
+        'what' gathers the reasons from the unsatisfied operands
+        :param expr: or node with 2+ operands
+        :param req: request being checked
+        :return: combined verdict
         """
         v = Verdict(satisfied=False, what=[])
         for e in expr.expressions:
@@ -292,10 +326,14 @@ class Evaluator:
 
     def comparison(self, comp: Comparison, req: Request) -> Verdict:
         """
-
-        :param comp:
-        :param req:
-        :return:
+        evaluates a comparison.
+        - unary (op is None): the operand itself must resolve to a Bool,
+          which becomes the verdict, e.g. 'exists(query)'
+        - binary: delegated to the resolver
+        :param comp: comparison node
+        :param req: request being checked
+        :return: verdict of the comparison
+        :raises DslComparisonError: if a unary operand does not resolve to a Bool
         """
         if comp.op is None:
             resolved = self.resolver.resolve_unary(comp, req)
@@ -307,10 +345,11 @@ class Evaluator:
 
     def resolve_expression(self, expr: Expr, req: Request) -> Verdict:
         """
-
-        :param expr:
-        :param req:
-        :return:
+        evaluates any expression node by dispatching on its type
+        :param expr: comparison, not, and or or node
+        :param req: request being checked
+        :return: verdict of the expression
+        :raises ValueError: if the node type is unknown
         """
         if isinstance(expr, Comparison):
             return self.comparison(expr, req)
@@ -325,20 +364,22 @@ class Evaluator:
 
     def satisfied(self, pred: Pred, req: Request) -> Verdict:
         """
-
-        :param pred:
-        :param req:
-        :return:
+        evaluates a single predicate, i.e. the expression it holds
+        :param pred: predicate node
+        :param req: request being checked
+        :return: verdict of the predicate
         """
         expr = pred.expression
         return self.resolve_expression(expr, req)
 
     def evaluate(self, rule: Rule, req: Request) -> Verdict:
         """
-
-        :param rule:
-        :param req:
-        :return: True if the rule is all satisfied, False otherwise
+        evaluates a rule: all its predicates must be satisfied.
+        stops at the first unsatisfied predicate and returns its verdict,
+        otherwise returns the verdict of the last predicate
+        :param rule: rule node
+        :param req: request being checked
+        :return: verdict of the rule, satisfied is True only if every predicate is satisfied
         """
         verdict = Verdict(satisfied=True)
         satisfied = True
