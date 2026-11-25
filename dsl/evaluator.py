@@ -2,8 +2,8 @@ import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, Any, List, Optional, Union, Tuple, Mapping
-from dslast import *
-from grammar import AllowedComp, AllowedOperator, AllowedFunc, AllowedField
+from apivalidator.dsl.dslast import *
+from apivalidator.dsl.grammar import AllowedComp, AllowedOperator, AllowedFunc, AllowedField
 
 
 class Missing:
@@ -36,19 +36,19 @@ class Request:
 
     def __post_init__(self):
         """
-        normalize
+        normalize: the method to upper case, header names to lower case
         """
         object.__setattr__(self, "method", self.method.upper())
         object.__setattr__(self, "headers", {k.lower(): v for k, v in self.headers.items()})
 
     def header(self, name: str) -> Any:
         """
-        looks up a request header by name.
+        looks up a request header by name (case-insensitive).
         header names are stored in lower case (see __post_init__)
         :param name: header name
         :return: header value, or _MISSING if there is no such header
         """
-        return self.headers.get(name, _MISSING)
+        return self.headers.get(name.lower(), _MISSING)
 
     def body_at(self, path: Tuple[str, ...]) -> Any:
         """
@@ -60,8 +60,8 @@ class Request:
         """
         cur = self.body
         for key in path:
-            if isinstance(cur, Dict) and key in cur:
-                return cur[key]
+            if isinstance(cur, dict) and key in cur:
+                cur = cur[key]
             else:
                 return _MISSING
         return cur
@@ -144,10 +144,46 @@ class DslCallError(ValueError):
         self.context = context
 
 
-# any value an operand can be resolved to: a literal node, a list literal or a dict (e.g. a part of the body)
-_VALUE = Union[Literal, ListLit, Dict, Missing]
+# any value an operand can be resolved to: a literal node, a list literal,
+# a dict (query or a part of the body), _MISSING (absent value) or None (JSON null)
+_VALUE = Union[Literal, ListLit, Dict, Missing, None]
 
-_ARGS = Tuple[Operand, ...]
+_ARGS = Tuple[_VALUE, ...]
+
+
+def _describe(value: Any) -> str:
+    """
+    short text form of a resolved value, used in failure reasons (Verdict.what)
+    :param value: literal node, list literal or anything else
+    :return: readable representation
+    """
+    if isinstance(value, ListLit):
+        return repr([getattr(item, "value", item) for item in value.values])
+    return repr(getattr(value, "value", value))
+
+
+def _wrap(value: Any) -> _VALUE:
+    """
+    converts a raw python value taken from the parsed body into an AST value node,
+    so that it can be passed to functions and comparisons like any literal.
+    dicts stay raw (they are walked by key), lists become ListLit
+    :param value: raw value (str, int, float, bool, list, dict, None) or _MISSING
+    :return: String / Number / Bool / ListLit, a dict, None or _MISSING
+    :raises DslComparisonError: if the value type is not supported
+    """
+    if value is _MISSING or value is None or isinstance(value, dict):
+        return value
+    if isinstance(value, (Bool, String, Number, ListLit)):
+        return value
+    if isinstance(value, bool):  # before int: bool is a subclass of int
+        return Bool(value)
+    if isinstance(value, (int, float)):
+        return Number(value)
+    if isinstance(value, str):
+        return String(value)
+    if isinstance(value, (list, tuple)):
+        return ListLit(tuple(_wrap(item) for item in value))
+    raise DslComparisonError(f"unsupported value type: {type(value).__name__}")
 
 
 class LiteralValueType(Enum):
@@ -159,14 +195,14 @@ class LiteralValueType(Enum):
     STRING = String
     INT = Number
     LIST = ListLit
-    BODY = Dict
-    SIZED = (String, ListLit, Dict)
+    BODY = dict
+    SIZED = (String, ListLit, dict)
     VOID = None  # return type only
 
 
 class CallSignature:
     """
-    describes what a function (or a comparison) accepts and returns:
+    describes what a function accepts and returns:
     the list of argument types and the return type
     """
 
@@ -187,36 +223,34 @@ class CallSignature:
         if len(self.expects) != len(args):
             return False
         for arg, expected in zip(args, self.expects):
-            if self._type_of(arg) != expected:
+            if not self._matches(arg, expected):
                 return False
         return True
 
     @staticmethod
-    def _type_of(arg: Operand) -> LiteralValueType:
+    def _matches(arg: _VALUE, expected: LiteralValueType) -> bool:
         """
-        maps an AST node to its LiteralValueType
-        :param arg: AST node
-        :return: the matching type member
-        :raises DslCallError: if the node has no matching type
+        checks that a resolved value is of the expected type
+        :param arg: resolved value
+        :param expected: expected type
+        :return: True if the value is an instance of the type (or of any of its classes)
         """
-        try:
-            return LiteralValueType(type(arg))
-        except ValueError:
-            raise DslCallError(f"unexpected operand: {type(arg).__name__}") from None
+        if expected is LiteralValueType.VOID:
+            return False
+        return isinstance(arg, expected.value)
 
 
 _LOWER_SIGNATURE = CallSignature([LiteralValueType.STRING], LiteralValueType.STRING)
 _LEN_SIGNATURE = CallSignature([LiteralValueType.SIZED], LiteralValueType.INT)
-_EXISTS_SIGNATURE = CallSignature([LiteralValueType.BODY, LiteralValueType.STRING], LiteralValueType.BOOL)
 _INT_SIGNATURE = CallSignature([LiteralValueType.STRING], LiteralValueType.INT)
 _HEADER_SIGNATURE = CallSignature([LiteralValueType.STRING], LiteralValueType.STRING)
-_COMPARATOR_SIGNATURE = CallSignature([LiteralValueType.INT, LiteralValueType.INT], LiteralValueType.BOOL)
+# exists() has no signature: it takes any single value, including a missing one
 
 
 class Caller:
     """
     implementations of the DSL functions (see AllowedFunc in grammar.py).
-    each method receives the raw, not yet resolved argument nodes and the request,
+    each method receives the already resolved arguments and the request,
     and returns the resulting value.
     the grammar does not check arity or argument types, so every method
     has to validate its arguments itself and raise DslCallError on a mismatch
@@ -231,10 +265,9 @@ class Caller:
         :raises DslCallError: if the arguments do not match the signature
         """
         if not sign.args_match(args):
-            raise DslCallError(f"call signature doesn't match given arguments: {type(args).__name__}",
-                               None,
-                               None,
-                               f"expected: {type(sign.expects).__name__}")
+            raise DslCallError("call signature doesn't match given arguments",
+                               ", ".join(t.name for t in sign.expects),
+                               ", ".join(type(a).__name__ for a in args))
 
     def call_lower(self, args: _ARGS, req: Request) -> _VALUE:
         """
@@ -267,16 +300,23 @@ class Caller:
 
     def call_exists(self, args: _ARGS, req: Request) -> _VALUE:
         """
-        exists(x): checks that x is present in the request
+        exists(x): checks that x is present in the request.
+        a missing value (absent header or body key) and an empty dict
+        (e.g. a request without query parameters) do not exist
         :param args: exactly one argument (usually a field or a header call)
         :param req: request being checked
         :return: boolean literal, True if the value is present
         """
-        self._signature_assert(args, _EXISTS_SIGNATURE)
-        return_type = _EXISTS_SIGNATURE.returns.value
-        key = args[1].value
-        exists = args[0].__contains__(key)
-        return return_type(exists)
+        if len(args) != 1:
+            raise DslCallError("exists takes exactly one argument",
+                               "1 argument",
+                               f"{len(args)} arguments")
+        value = args[0]
+        if value is _MISSING:
+            return Bool(False)
+        if isinstance(value, dict) and not value:
+            return Bool(False)
+        return Bool(True)
 
     def call_int(self, args: _ARGS, req: Request) -> _VALUE:
         """
@@ -287,7 +327,12 @@ class Caller:
         """
         self._signature_assert(args, _INT_SIGNATURE)
         return_type = _INT_SIGNATURE.returns.value
-        converted = int(args[0].value)
+        try:
+            converted = int(args[0].value)
+        except ValueError:
+            raise DslCallError("cannot convert value to int",
+                               "a string with an integer",
+                               repr(args[0].value)) from None
         return return_type(converted)
 
     def call_header(self, args: _ARGS, req: Request) -> _VALUE:
@@ -295,7 +340,7 @@ class Caller:
         header(name): the value of the request header with the given name
         :param args: exactly one argument, the header name as a string
         :param req: request being checked
-        :return: header value, or whatever the DSL uses for an absent header
+        :return: header value, or _MISSING for an absent header
         """
         self._signature_assert(args, _HEADER_SIGNATURE)
         return_type = _HEADER_SIGNATURE.returns.value
@@ -309,7 +354,9 @@ class Caller:
 class Comparator:
     """
     applies the symbol comparison operators (>=, <=, ==, !=, <, >)
-    to two already resolved values
+    to two already resolved values.
+    both sides must be literals of the same kind (two strings, two numbers, two booleans);
+    ordering (>=, <=, <, >) is not defined for booleans
     """
 
     @staticmethod
@@ -320,15 +367,19 @@ class Comparator:
         :param cmp: comparison operator
         :param right: right value
         :return: boolean literal with the result
-        :raises DslComparisonError: if the operand types do not fit the comparison signature
+        :raises DslComparisonError: if the operand kinds differ or the operator does not apply
         """
-        if not _COMPARATOR_SIGNATURE.args_match((type(left), type(right))):
-            raise DslComparisonError(f"invalid comparing signature: {(type(left), type(right))}")
+        if type(left) is not type(right):
+            raise DslComparisonError(f"cannot compare {type(left).__name__} with {type(right).__name__}")
 
         l = left.value
         r = right.value
         if cmp == AllowedComp.EQ:
             return Bool(l == r)
+        if cmp == AllowedComp.NEQ:
+            return Bool(l != r)
+        if isinstance(left, Bool):
+            raise DslComparisonError(f"operator '{cmp.value}' does not apply to booleans")
         if cmp == AllowedComp.GE:
             return Bool(l >= r)
         if cmp == AllowedComp.GT:
@@ -337,8 +388,7 @@ class Comparator:
             return Bool(l <= r)
         if cmp == AllowedComp.LT:
             return Bool(l < r)
-        if cmp == AllowedComp.NEQ:
-            return Bool(l != r)
+        raise DslComparisonError(f"unknown comparison operator: {cmp}")
 
 
 class Operating:
@@ -348,7 +398,7 @@ class Operating:
     """
 
     @staticmethod
-    def is_in(left: Operand, right: ListLit) -> Bool:
+    def is_in(left: Literal, right: ListLit) -> Bool:
         """
         'in': checks that the left value equals one of the list items
         :param left: value to look for
@@ -382,7 +432,7 @@ class Operating:
         return Bool(pattern.match(left.value) is not None)
 
     @staticmethod
-    def operate(left: Operand, op: AllowedOperator, right: Operand) -> Bool:
+    def operate(left: _VALUE, op: AllowedOperator, right: _VALUE) -> Bool:
         """
         validates the operand types and dispatches on the word operator
         :param left: left operand
@@ -392,9 +442,9 @@ class Operating:
         :raises DslComparisonError: if the operand types do not fit the operator
         """
         if op == AllowedOperator.IN:
-            if not isinstance(right, ListLit):
-                raise DslComparisonError(f"invalid argument for 'in' clause: "
-                                         f"{type(right).__name__}")
+            if not isinstance(left, Literal) or not isinstance(right, ListLit):
+                raise DslComparisonError(f"invalid arguments for 'in' clause: "
+                                         f"{type(left).__name__}, {type(right).__name__}")
             return Operating.is_in(left, right)
         if op == AllowedOperator.STARTS_WITH:
             if not isinstance(left, String) or not isinstance(right, String):
@@ -406,6 +456,7 @@ class Operating:
                 raise DslComparisonError(f"invalid arguments for 'matches' clause: "
                                          f"{type(left).__name__}, {type(right).__name__}")
             return Operating.does_match(left, right)
+        raise DslComparisonError(f"unknown operator: {op}")
 
 
 class Resolver:
@@ -416,7 +467,8 @@ class Resolver:
 
     def __init__(self):
         """
-        initialize self, creates the caller that implements the DSL functions
+        initialize self, creates the caller that implements the DSL functions,
+        the comparator for symbol comparisons and the operating for word operators
         """
         self.caller = Caller()
         self.comparator = Comparator()
@@ -441,7 +493,7 @@ class Resolver:
         else:
             raise DslComparisonError(f"unexpected comparison: {type(l).__name__}")
 
-    def resolve_operands(self, operands: Tuple[Operand, ...], req: Request) -> Tuple[_VALUE]:
+    def resolve_operands(self, operands: Tuple[Operand, ...], req: Request) -> Tuple[_VALUE, ...]:
         """
         resolves every operand (used for function arguments),
         so nested calls like lower(header("X")) are computed before the outer call
@@ -489,10 +541,13 @@ class Resolver:
     def resolve_field(self, field: Field, req: Request) -> _VALUE:
         """
         resolves access to a request field (method, path, query, body),
-        including a nested path for the body, e.g. 'body.user.name'
+        including a nested path for the body, e.g. 'body.user.name'.
+        body values are wrapped into AST nodes (see _wrap)
         :param field: field node with its optional path
         :param req: request being checked
-        :return: the value of the field taken from the request
+        :return: the value of the field taken from the request,
+                 _MISSING if the body or the body path is absent
+        :raises DslComparisonError: if the field is unknown or the body value type is unsupported
         """
         name = field.field_name
         if name == AllowedField.METHOD:
@@ -502,10 +557,21 @@ class Resolver:
         if name == AllowedField.QUERY:
             return dict(req.query)
         if name == AllowedField.BODY:
-            value = req.body_at(field.path or ())
-            if value is _MISSING:
-                raise DslComparisonError(f"body path not found: {'.'.join(field.path) or ()}")
-            return value
+            return _wrap(req.body_at(field.path))
+        raise DslComparisonError(f"unknown field: {name}")
+
+    @staticmethod
+    def _missing_verdict(comp: Comparison, left: _VALUE, right: _VALUE) -> Optional[Verdict]:
+        """
+        a comparison with an absent value (e.g. a missing header) is not satisfied
+        :param comp: comparison node
+        :param left: resolved left side
+        :param right: resolved right side
+        :return: unsatisfied verdict if any side is _MISSING, None otherwise
+        """
+        if left is _MISSING or right is _MISSING:
+            return Verdict(satisfied=False, what=[f"'{comp.op.value}': value is missing in the request"])
+        return None
 
     def resolve_binary(self, comp: Comparison, req: Request) -> Verdict:
         """
@@ -528,23 +594,31 @@ class Resolver:
     def compare(self, comp: Comparison, req: Request) -> Verdict:
         """
         applies a symbol comparison (>=, <=, ==, !=, <, >):
-        resolves both sides and compares the values
+        resolves both sides and compares the values.
+        if a side is missing from the request, the verdict is "not satisfied"
         :param comp: comparison node, comp.op is an AllowedComp
         :param req: request being checked
         :return: verdict of the comparison
+        :raises DslComparisonError: if the operands are not literals of the same kind
         """
-        if not isinstance(comp.right, Operand):
+        if comp.right is None or isinstance(comp.right, ListLit):
             raise DslComparisonError(f"invalid comparing operand: {type(comp.right).__name__}")
 
         left = self.resolve_unary(Comparison(comp.left), req)
-        if not isinstance(comp.right, ListLit) and comp.right is not None:
-            right = self.resolve_unary(Comparison(comp.right), req)
-        else:
-            right = comp.right
+        right = self.resolve_unary(Comparison(comp.right), req)
+        missing = self._missing_verdict(comp, left, right)
+        if missing is not None:
+            return missing
         if not isinstance(left, Literal) or not isinstance(right, Literal):
-            raise DslComparisonError(f"invalid ")
+            raise DslComparisonError(
+                f"invalid operands for {comp.op.value}: "
+                f"left={type(left).__name__}, right={type(right).__name__}"
+            )
         res = self.comparator.compare(left, comp.op, right)
-        return Verdict(satisfied=res.value)
+        if res.value:
+            return Verdict(satisfied=True)
+        return Verdict(satisfied=False,
+                       what=[f"{_describe(left)} {comp.op.value} {_describe(right)} is not true"])
 
     def operate(self, comp: Comparison, req: Request) -> Verdict:
         """
@@ -552,22 +626,30 @@ class Resolver:
         - starts_with: left starts with the right operand
         - in: left is one of the values of the right list literal
         - matches: left matches the regular expression in the right string
+        if a side is missing from the request, the verdict is "not satisfied"
         :param comp: comparison node, comp.op is an AllowedOperator
         :param req: request being checked
         :return: verdict of the operation
+        :raises DslComparisonError: if the operand types do not fit the operator
         """
         left = self.resolve_unary(Comparison(comp.left), req)
-        if not isinstance(comp.right, ListLit) and comp.right is not None:
-            right = self.resolve_unary(Comparison(comp.right), req)
-        else:
+        if isinstance(comp.right, ListLit):
             right = comp.right
-        if not isinstance(left, Operand) or not isinstance(right, Operand):
+        else:
+            right = self.resolve_unary(Comparison(comp.right), req)
+        missing = self._missing_verdict(comp, left, right)
+        if missing is not None:
+            return missing
+        if not isinstance(left, Literal) or not (isinstance(right, Literal) or isinstance(right, ListLit)):
             raise DslComparisonError(
-                f"invalid operands for {comp.op}: "
+                f"invalid operands for {comp.op.value}: "
                 f"left={type(left).__name__}, right={type(right).__name__}"
             )
         res = self.operating.operate(left, comp.op, right)
-        return Verdict(satisfied=res.value)
+        if res.value:
+            return Verdict(satisfied=True)
+        return Verdict(satisfied=False,
+                       what=[f"{_describe(left)} {comp.op.value} {_describe(right)} is not true"])
 
 
 class Evaluator:
