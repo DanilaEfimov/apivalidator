@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, Any, List, Optional, Union, Tuple, Mapping
 from dslast import *
-from grammar import AllowedComp, AllowedOperator, AllowedFunc
+from grammar import AllowedComp, AllowedOperator, AllowedFunc, AllowedField
 
 
 class Missing:
@@ -137,8 +137,11 @@ class DslCallError(ValueError):
         self.context = context
 
 
+#TODO: comparator & operator
+
+
 # any value an operand can be resolved to: a literal node, a list literal or a dict (e.g. a part of the body)
-_VALUE = Union[Literal, ListLit, Dict]
+_VALUE = Union[Literal, ListLit, Dict, Missing]
 
 _ARGS = Tuple[Operand, ...]
 
@@ -285,7 +288,13 @@ class Caller:
         :param req: request being checked
         :return: header value, or whatever the DSL uses for an absent header
         """
-        ...
+        self._signature_assert(args, _HEADER_SIGNATURE)
+        return_type = _HEADER_SIGNATURE.returns.value
+        name = args[0].value
+        header = req.header(name)
+        if header is _MISSING:
+            return _MISSING
+        return return_type(str(header))
 
 
 class Resolver:
@@ -319,6 +328,14 @@ class Resolver:
         else:
             raise DslComparisonError(f"unexpected comparison: {type(l).__name__}")
 
+    def resolve_operands(self, operands: Tuple[Operand, ...]) -> Tuple[Literal]:
+        """
+
+        :param operands:
+        :return:
+        """
+        ...
+
     def resolve_call(self, call: Call, req: Request) -> _VALUE:
         """
         resolves a function call by dispatching on the function name
@@ -330,7 +347,7 @@ class Resolver:
         """
         func = call.func.func_name
         caller = self.caller
-        args = call.args
+        args = self.resolve_operands(call.args)
         if func == AllowedFunc.EXISTS:
             return caller.call_exists(args, req)
         elif func == AllowedFunc.HEADER:
@@ -352,7 +369,7 @@ class Resolver:
         :param req: request being checked (unused for literals)
         :return: the literal value
         """
-        ...
+        return lit
 
     def resolve_field(self, field: Field, req: Request) -> _VALUE:
         """
@@ -362,7 +379,18 @@ class Resolver:
         :param req: request being checked
         :return: the value of the field taken from the request
         """
-        ...
+        name = field.field_name
+        if name == AllowedField.METHOD:
+            return String(req.method)
+        if name == AllowedField.PATH:
+            return String(req.path)
+        if name == AllowedField.QUERY:
+            return Dict(req.query)
+        if name == AllowedField.BODY:
+            value = req.body_at(field.path or ())
+            if value is _MISSING:
+                raise DslComparisonError(f"body path not found: {'.'.join(field.path) or ()}")
+            return value
 
     def resolve_binary(self, comp: Comparison, req: Request) -> Verdict:
         """
