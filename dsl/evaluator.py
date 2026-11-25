@@ -1,6 +1,9 @@
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, Any, List, Optional, Union, Tuple, Mapping
+
+from django.contrib.auth import check_password_with_timing_attack_mitigation
+
 from dslast import *
 from grammar import AllowedComp, AllowedOperator, AllowedFunc, AllowedField
 
@@ -137,9 +140,6 @@ class DslCallError(ValueError):
         self.context = context
 
 
-#TODO: comparator & operator
-
-
 # any value an operand can be resolved to: a literal node, a list literal or a dict (e.g. a part of the body)
 _VALUE = Union[Literal, ListLit, Dict, Missing]
 
@@ -202,6 +202,7 @@ _LEN_SIGNATURE = CallSignature([LiteralValueType.SIZED], LiteralValueType.INT)
 _EXISTS_SIGNATURE = CallSignature([LiteralValueType.BODY, LiteralValueType.STRING], LiteralValueType.BOOL)
 _INT_SIGNATURE = CallSignature([LiteralValueType.STRING], LiteralValueType.INT)
 _HEADER_SIGNATURE = CallSignature([LiteralValueType.STRING], LiteralValueType.STRING)
+_COMPARATOR_SIGNATURE = CallSignature([LiteralValueType.INT, LiteralValueType.INT], LiteralValueType.BOOL)
 
 
 class Caller:
@@ -297,6 +298,40 @@ class Caller:
         return return_type(str(header))
 
 
+#TODO: comparator & operator
+class Comparator:
+    """
+
+    """
+
+    @staticmethod
+    def compare(left: Operand, cmp: AllowedComp, right: Operand) -> Bool:
+        """
+
+        :param left:
+        :param cmp:
+        :param right:
+        :return:
+        """
+        if not _COMPARATOR_SIGNATURE.args_match((type(left), type(right))):
+            raise DslComparisonError(f"invalid comparing signature: {(type(left), type(right))}")
+
+        l = left.value
+        r = right.value
+        if cmp == AllowedComp.EQ:
+            return Bool(l == r)
+        if cmp == AllowedComp.GE:
+            return Bool(l >= r)
+        if cmp == AllowedComp.GT:
+            return Bool(l > r)
+        if cmp == AllowedComp.LE:
+            return Bool(l <= r)
+        if cmp == AllowedComp.LT:
+            return Bool(l < r)
+        if cmp == AllowedComp.NEQ:
+            return Bool(l != r)
+
+
 class Resolver:
     """
     turns operands (literals, fields, calls) into values
@@ -308,6 +343,7 @@ class Resolver:
         initialize self, creates the caller that implements the DSL functions
         """
         self.caller = Caller()
+        self.comparator = Comparator()
 
     def resolve_unary(self, comp: Comparison, req: Request) -> _VALUE:
         """
@@ -328,13 +364,14 @@ class Resolver:
         else:
             raise DslComparisonError(f"unexpected comparison: {type(l).__name__}")
 
-    def resolve_operands(self, operands: Tuple[Operand, ...]) -> Tuple[Literal]:
+    def resolve_operands(self, operands: Tuple[Operand, ...], req: Request) -> Tuple[_VALUE]:
         """
 
         :param operands:
+        :param req:
         :return:
         """
-        ...
+        return Tuple(self.resolve_unary(Comparison(operand), req) for operand in operands)
 
     def resolve_call(self, call: Call, req: Request) -> _VALUE:
         """
@@ -418,7 +455,13 @@ class Resolver:
         :param req: request being checked
         :return: verdict of the comparison
         """
-        ...
+        if not isinstance(comp.right, Operand):
+            raise DslComparisonError(f"invalid comparing operand: {type(comp.right).__name__}")
+
+        left = self.resolve_unary(Comparison(comp.left), req)
+        right = self.resolve_unary(Comparison(comp.right), req)
+        res = self.comparator.compare(left, comp.op, right)
+        return Verdict(satisfied=res.value)
 
     def operate(self, comp: Comparison, req: Request) -> Verdict:
         """
