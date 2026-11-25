@@ -1,9 +1,21 @@
-from ast import literal_eval
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, Any, List, Optional, Union, Tuple
+from typing import Dict, Any, List, Optional, Union, Tuple, Mapping
 from dslast import *
 from grammar import AllowedComp, AllowedOperator, AllowedFunc
+
+
+class Missing:
+    """
+
+    """
+
+    def __repr__(self): return "MISSING"
+
+    def __bool__(self): return False
+
+
+_MISSING = Missing()
 
 
 @dataclass(frozen=True)
@@ -12,8 +24,40 @@ class Request:
     the http request the rules are checked against.
     immutable, so one request can be safely reused across rules and predicates
     """
-    #TODO: implement HTTP request fields
-    d: Dict[str, Any]
+    method: str
+    path: str
+    query: Mapping[str, Tuple[str, ...]] = field(default_factory=dict)
+    headers: Mapping[str, str] = field(default_factory=dict)
+    body: Any = _MISSING
+
+    def __post_init__(self):
+        """
+        normalize
+        """
+        object.__setattr__(self, "method", self.method.upper())
+        object.__setattr__(self, "headers", {k.lower(): v for k, v in self.headers.items()})
+
+    def header(self, name: str) -> Any:
+        """
+
+        :param name:
+        :return:
+        """
+        return self.headers.get(name, _MISSING)
+
+    def body_at(self, path: Tuple[str, ...]) -> Any:
+        """
+
+        :param path:
+        :return:
+        """
+        cur = self.body
+        for key in path:
+            if isinstance(cur, Dict) and key in cur:
+                return cur[key]
+            else:
+                return _MISSING
+        return cur
 
 
 @dataclass
@@ -109,7 +153,7 @@ class LiteralValueType(Enum):
     LIST = ListLit
     BODY = Dict
     SIZED = (String, ListLit, Dict)
-    VOID = None # return type only
+    VOID = None  # return type only
 
 
 class CallSignature:
@@ -166,7 +210,8 @@ class Caller:
     has to validate its arguments itself and raise DslCallError on a mismatch
     """
 
-    def _signature_assert(self, args: _ARGS, sign: CallSignature) -> None:
+    @staticmethod
+    def _signature_assert(args: _ARGS, sign: CallSignature) -> None:
         """
 
         :param args:
