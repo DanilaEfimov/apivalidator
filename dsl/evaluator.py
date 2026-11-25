@@ -8,7 +8,10 @@ from grammar import AllowedComp, AllowedOperator, AllowedFunc, AllowedField
 
 class Missing:
     """
-
+    marker type for a value that is absent from the request
+    (a missing header, a missing body key).
+    differs from None, which is a real JSON null.
+    falsy, so it can be checked with 'if not value'
     """
 
     def __repr__(self): return "MISSING"
@@ -40,17 +43,20 @@ class Request:
 
     def header(self, name: str) -> Any:
         """
-
-        :param name:
-        :return:
+        looks up a request header by name.
+        header names are stored in lower case (see __post_init__)
+        :param name: header name
+        :return: header value, or _MISSING if there is no such header
         """
         return self.headers.get(name, _MISSING)
 
     def body_at(self, path: Tuple[str, ...]) -> Any:
         """
-
-        :param path:
-        :return:
+        walks the parsed body by a chain of dict keys,
+        e.g. ('user', 'name') for 'body.user.name'
+        :param path: keys to follow, empty tuple means the whole body
+        :return: the value at the path, or _MISSING if any key is absent
+                 or an intermediate value is not a dict
         """
         cur = self.body
         for key in path:
@@ -146,7 +152,8 @@ _ARGS = Tuple[Operand, ...]
 
 class LiteralValueType(Enum):
     """
-
+    value types known to the call signatures.
+    the member value is the AST node class (or a tuple of classes) of that type
     """
     BOOL = Bool
     STRING = String
@@ -159,7 +166,8 @@ class LiteralValueType(Enum):
 
 class CallSignature:
     """
-
+    describes what a function (or a comparison) accepts and returns:
+    the list of argument types and the return type
     """
 
     def __init__(self, expects: List[LiteralValueType], returns: LiteralValueType):
@@ -172,8 +180,9 @@ class CallSignature:
 
     def args_match(self, args: _ARGS) -> bool:
         """
-        :param args:
-        :return:
+        checks the arguments against the signature: same count and same types, in order
+        :param args: resolved argument values
+        :return: True if the arguments fit the signature, False otherwise
         """
         if len(self.expects) != len(args):
             return False
@@ -185,9 +194,10 @@ class CallSignature:
     @staticmethod
     def _type_of(arg: Operand) -> LiteralValueType:
         """
-
-        :param arg:
-        :return:
+        maps an AST node to its LiteralValueType
+        :param arg: AST node
+        :return: the matching type member
+        :raises DslCallError: if the node has no matching type
         """
         try:
             return LiteralValueType(type(arg))
@@ -215,10 +225,10 @@ class Caller:
     @staticmethod
     def _signature_assert(args: _ARGS, sign: CallSignature) -> None:
         """
-
-        :param args:
-        :param sign:
-        :return:
+        checks the arguments against the signature
+        :param args: resolved argument values
+        :param sign: expected signature
+        :raises DslCallError: if the arguments do not match the signature
         """
         if not sign.args_match(args):
             raise DslCallError(f"call signature doesn't match given arguments: {type(args).__name__}",
@@ -298,17 +308,19 @@ class Caller:
 
 class Comparator:
     """
-
+    applies the symbol comparison operators (>=, <=, ==, !=, <, >)
+    to two already resolved values
     """
 
     @staticmethod
     def compare(left: Literal, cmp: AllowedComp, right: Literal) -> Bool:
         """
-
-        :param left:
-        :param cmp:
-        :param right:
-        :return:
+        compares two literals with the given operator
+        :param left: left value
+        :param cmp: comparison operator
+        :param right: right value
+        :return: boolean literal with the result
+        :raises DslComparisonError: if the operand types do not fit the comparison signature
         """
         if not _COMPARATOR_SIGNATURE.args_match((type(left), type(right))):
             raise DslComparisonError(f"invalid comparing signature: {(type(left), type(right))}")
@@ -331,16 +343,17 @@ class Comparator:
 
 class Operating:
     """
-
+    applies the word operators (in, starts_with, matches)
+    to two already resolved values
     """
 
     @staticmethod
     def is_in(left: Operand, right: ListLit) -> Bool:
         """
-
-        :param left:
-        :param right:
-        :return:
+        'in': checks that the left value equals one of the list items
+        :param left: value to look for
+        :param right: list literal to look in
+        :return: True if the value is in the list
         """
         for item in right.values:
             if left.value == item.value:
@@ -350,20 +363,20 @@ class Operating:
     @staticmethod
     def does_start_with(left: String, right: String) -> Bool:
         """
-
-        :param left:
-        :param right:
-        :return:
+        'starts_with': checks the prefix of a string
+        :param left: the string to check
+        :param right: the expected prefix
+        :return: True if left starts with right
         """
         return Bool(left.value.startswith(right.value))
 
     @staticmethod
     def does_match(left: String, right: String) -> Bool:
         """
-
-        :param left:
-        :param right:
-        :return:
+        'matches': checks a string against a regular expression
+        :param left: the string to check
+        :param right: the regular expression
+        :return: True if the pattern matches (re.match, i.e. anchored at the start)
         """
         pattern = re.compile(right.value)
         return Bool(pattern.match(left.value) is not None)
@@ -371,11 +384,12 @@ class Operating:
     @staticmethod
     def operate(left: Operand, op: AllowedOperator, right: Operand) -> Bool:
         """
-
-        :param left:
-        :param op:
-        :param right:
-        :return:
+        validates the operand types and dispatches on the word operator
+        :param left: left operand
+        :param op: word operator
+        :param right: right operand
+        :return: boolean literal with the result
+        :raises DslComparisonError: if the operand types do not fit the operator
         """
         if op == AllowedOperator.IN:
             if not isinstance(right, ListLit):
@@ -385,12 +399,12 @@ class Operating:
         if op == AllowedOperator.STARTS_WITH:
             if not isinstance(left, String) or not isinstance(right, String):
                 raise DslComparisonError(f"invalid arguments for 'starts_with' clause: "
-                                         f"{type(left).__name__}, {type(right).__name}")
+                                         f"{type(left).__name__}, {type(right).__name__}")
             return Operating.does_start_with(left, right)
         if op == AllowedOperator.MATCHES:
             if not isinstance(left, String) or not isinstance(right, String):
                 raise DslComparisonError(f"invalid arguments for 'matches' clause: "
-                                         f"{type(left).__name__}, {type(right).__name}")
+                                         f"{type(left).__name__}, {type(right).__name__}")
             return Operating.does_match(left, right)
 
 
@@ -429,12 +443,13 @@ class Resolver:
 
     def resolve_operands(self, operands: Tuple[Operand, ...], req: Request) -> Tuple[_VALUE]:
         """
-
-        :param operands:
-        :param req:
-        :return:
+        resolves every operand (used for function arguments),
+        so nested calls like lower(header("X")) are computed before the outer call
+        :param operands: operand nodes
+        :param req: request being checked
+        :return: tuple of resolved values, in the same order
         """
-        return Tuple(self.resolve_unary(Comparison(operand), req) for operand in operands)
+        return tuple(self.resolve_unary(Comparison(operand), req) for operand in operands)
 
     def resolve_call(self, call: Call, req: Request) -> _VALUE:
         """
@@ -447,7 +462,7 @@ class Resolver:
         """
         func = call.func.func_name
         caller = self.caller
-        args = self.resolve_operands(call.args)
+        args = self.resolve_operands(call.args, req)
         if func == AllowedFunc.EXISTS:
             return caller.call_exists(args, req)
         elif func == AllowedFunc.HEADER:
@@ -485,7 +500,7 @@ class Resolver:
         if name == AllowedField.PATH:
             return String(req.path)
         if name == AllowedField.QUERY:
-            return Dict(req.query)
+            return dict(req.query)
         if name == AllowedField.BODY:
             value = req.body_at(field.path or ())
             if value is _MISSING:
