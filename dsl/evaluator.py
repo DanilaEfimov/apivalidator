@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, Any, List, Optional, Union, Tuple, Mapping
@@ -330,6 +331,71 @@ class Comparator:
             return Bool(l < r)
         if cmp == AllowedComp.NEQ:
             return Bool(l != r)
+
+
+class Operating:
+    """
+
+    """
+
+    @staticmethod
+    def is_in(left: Operand, right: ListLit) -> Bool:
+        """
+
+        :param left:
+        :param right:
+        :return:
+        """
+        for item in right.values:
+            if left.value == item.value:
+                return Bool(value=True)
+        return Bool(value=False)
+
+    @staticmethod
+    def does_start_with(left: String, right: String) -> Bool:
+        """
+
+        :param left:
+        :param right:
+        :return:
+        """
+        return Bool(left.value.startswith(right.value))
+
+    @staticmethod
+    def does_match(left: String, right: String) -> Bool:
+        """
+
+        :param left:
+        :param right:
+        :return:
+        """
+        pattern = re.compile(right.value)
+        return Bool(pattern.match(left.value) is not None)
+
+    @staticmethod
+    def operate(left: Operand, op: AllowedOperator, right: Operand) -> Bool:
+        """
+
+        :param left:
+        :param op:
+        :param right:
+        :return:
+        """
+        if op == AllowedOperator.IN:
+            if not isinstance(right, ListLit):
+                raise DslComparisonError(f"invalid argument for 'in' clause: "
+                                         f"{type(right).__name__}")
+            return Operating.is_in(left, right)
+        if op == AllowedOperator.STARTS_WITH:
+            if not isinstance(left, String) or not isinstance(right, String):
+                raise DslComparisonError(f"invalid arguments for 'starts_with' clause: "
+                                         f"{type(left).__name__}, {type(right).__name}")
+            return Operating.does_start_with(left, right)
+        if op == AllowedOperator.MATCHES:
+            if not isinstance(left, String) or not isinstance(right, String):
+                raise DslComparisonError(f"invalid arguments for 'matches' clause: "
+                                         f"{type(left).__name__}, {type(right).__name}")
+            return Operating.does_match(left, right)
 
 
 class Resolver:
