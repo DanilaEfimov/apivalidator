@@ -5,6 +5,7 @@ Public entry point is ``parse``; syntax errors are raised as ``DslSyntaxError``
 with line and column of the offending token.
 """
 
+import re
 from typing import Optional
 
 from lark import (

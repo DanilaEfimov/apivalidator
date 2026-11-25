@@ -428,8 +428,11 @@ class Operating:
         :param right: the regular expression
         :return: True if the pattern matches (re.match, i.e. anchored at the start)
         """
-        pattern = re.compile(right.value)
-        return Bool(pattern.match(left.value) is not None)
+        try:
+            pattern = re.compile(right.value)
+            return Bool(pattern.match(left.value) is not None)
+        except re.PatternError as e:
+            raise DslComparisonError(f"invalid regular expression: {right.value}") from None
 
     @staticmethod
     def operate(left: _VALUE, op: AllowedOperator, right: _VALUE) -> Bool:
@@ -668,14 +671,13 @@ class Evaluator:
     def not_expr(self, expr: NotExpr, req: Request) -> Verdict:
         """
         logical not: evaluates the inner expression and inverts its verdict.
-        note: 'what' of the inner verdict is kept as is
         :param expr: not node
         :param req: request being checked
         :return: inverted verdict
         """
         verdict = self.resolve_expression(expr.expression, req)
-        verdict.satisfied = not verdict.satisfied
-        return verdict
+        satisfied = verdict.satisfied
+        return Verdict(satisfied=not satisfied, what=[] if not satisfied else verdict.what)
 
     def and_expr(self, expr: AndExpr, req: Request) -> Verdict:
         """
@@ -768,11 +770,10 @@ class Evaluator:
         :param req: request being checked
         :return: verdict of the rule, satisfied is True only if every predicate is satisfied
         """
-        verdict = Verdict(satisfied=True)
         satisfied = True
         for pred in rule.predicates:
             verdict = self.satisfied(pred, req)
             satisfied = satisfied and verdict.satisfied
             if not satisfied:
                 return verdict
-        return verdict
+        return Verdict(satisfied=True)
