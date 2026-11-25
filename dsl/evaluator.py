@@ -2,9 +2,6 @@ import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, Any, List, Optional, Union, Tuple, Mapping
-
-from django.contrib.auth import check_password_with_timing_attack_mitigation
-
 from dslast import *
 from grammar import AllowedComp, AllowedOperator, AllowedFunc, AllowedField
 
@@ -299,14 +296,13 @@ class Caller:
         return return_type(str(header))
 
 
-#TODO: comparator & operator
 class Comparator:
     """
 
     """
 
     @staticmethod
-    def compare(left: Operand, cmp: AllowedComp, right: Operand) -> Bool:
+    def compare(left: Literal, cmp: AllowedComp, right: Literal) -> Bool:
         """
 
         :param left:
@@ -410,6 +406,7 @@ class Resolver:
         """
         self.caller = Caller()
         self.comparator = Comparator()
+        self.operating = Operating()
 
     def resolve_unary(self, comp: Comparison, req: Request) -> _VALUE:
         """
@@ -525,7 +522,12 @@ class Resolver:
             raise DslComparisonError(f"invalid comparing operand: {type(comp.right).__name__}")
 
         left = self.resolve_unary(Comparison(comp.left), req)
-        right = self.resolve_unary(Comparison(comp.right), req)
+        if not isinstance(comp.right, ListLit) and comp.right is not None:
+            right = self.resolve_unary(Comparison(comp.right), req)
+        else:
+            right = comp.right
+        if not isinstance(left, Literal) or not isinstance(right, Literal):
+            raise DslComparisonError(f"invalid ")
         res = self.comparator.compare(left, comp.op, right)
         return Verdict(satisfied=res.value)
 
@@ -539,7 +541,18 @@ class Resolver:
         :param req: request being checked
         :return: verdict of the operation
         """
-        ...
+        left = self.resolve_unary(Comparison(comp.left), req)
+        if not isinstance(comp.right, ListLit) and comp.right is not None:
+            right = self.resolve_unary(Comparison(comp.right), req)
+        else:
+            right = comp.right
+        if not isinstance(left, Operand) or not isinstance(right, Operand):
+            raise DslComparisonError(
+                f"invalid operands for {comp.op}: "
+                f"left={type(left).__name__}, right={type(right).__name__}"
+            )
+        res = self.operating.operate(left, comp.op, right)
+        return Verdict(satisfied=res.value)
 
 
 class Evaluator:
