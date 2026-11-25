@@ -1,4 +1,4 @@
-import re
+import regex
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, Any, List, Optional, Union, Tuple, Mapping
@@ -429,9 +429,9 @@ class Operating:
         :return: True if the pattern matches (re.match, i.e. anchored at the start)
         """
         try:
-            pattern = re.compile(right.value)
+            pattern = regex.compile(right.value)
             return Bool(pattern.match(left.value) is not None)
-        except re.PatternError as e:
+        except regex.PatternError as e:
             raise DslComparisonError(f"invalid regular expression: {right.value}") from None
 
     @staticmethod
