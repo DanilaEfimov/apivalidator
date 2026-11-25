@@ -1,4 +1,6 @@
+from ast import literal_eval
 from dataclasses import dataclass
+from enum import Enum
 from typing import Dict, Any, List, Optional, Union, Tuple
 from dslast import *
 from grammar import AllowedComp, AllowedOperator, AllowedFunc
@@ -31,9 +33,9 @@ class DslComparisonError(ValueError):
     """
 
     def __init__(self, message: str,
-                 pred: Optional[str]=None,
-                 rule: Optional[str]=None,
-                 context: str=""):
+                 pred: Optional[str] = None,
+                 rule: Optional[str] = None,
+                 context: str = ""):
         """
         :param message: error description
         :param pred: name of the predicate where the error happened
@@ -90,8 +92,70 @@ class DslCallError(ValueError):
         self.given = given
         self.context = context
 
+
 # any value an operand can be resolved to: a literal node, a list literal or a dict (e.g. a part of the body)
 _VALUE = Union[Literal, ListLit, Dict]
+
+_ARGS = Tuple[Operand, ...]
+
+
+class LiteralValueType(Enum):
+    """
+
+    """
+    BOOL = Bool
+    STRING = String
+    INT = Number
+    LIST = ListLit
+    BODY = Dict
+    SIZED = (String, ListLit, Dict)
+    VOID = None # return type only
+
+
+class CallSignature:
+    """
+
+    """
+
+    def __init__(self, expects: List[LiteralValueType], returns: LiteralValueType):
+        """
+        :param expects: list of argument types
+        :param returns: return value type
+        """
+        self.expects = expects
+        self.returns = returns
+
+    def args_match(self, args: _ARGS) -> bool:
+        """
+        :param args:
+        :return:
+        """
+        if len(self.expects) != len(args):
+            return False
+        for arg, expected in zip(args, self.expects):
+            if self._type_of(arg) != expected:
+                return False
+        return True
+
+    @staticmethod
+    def _type_of(arg: Operand) -> LiteralValueType:
+        """
+
+        :param arg:
+        :return:
+        """
+        try:
+            return LiteralValueType(type(arg))
+        except ValueError:
+            raise DslCallError(f"unexpected operand: {type(arg).__name__}") from None
+
+
+_LOWER_SIGNATURE = CallSignature([LiteralValueType.STRING], LiteralValueType.STRING)
+_LEN_SIGNATURE = CallSignature([LiteralValueType.SIZED], LiteralValueType.INT)
+_EXISTS_SIGNATURE = CallSignature([LiteralValueType.BODY, LiteralValueType.STRING], LiteralValueType.BOOL)
+_INT_SIGNATURE = CallSignature([LiteralValueType.STRING], LiteralValueType.INT)
+_HEADER_SIGNATURE = CallSignature([LiteralValueType.STRING], LiteralValueType.STRING)
+
 
 class Caller:
     """
@@ -102,43 +166,74 @@ class Caller:
     has to validate its arguments itself and raise DslCallError on a mismatch
     """
 
-    def call_lower(self, args: Tuple[Operand, ...], req: Request) -> _VALUE:
+    def _signature_assert(self, args: _ARGS, sign: CallSignature) -> None:
+        """
+
+        :param args:
+        :param sign:
+        :return:
+        """
+        if not sign.args_match(args):
+            raise DslCallError(f"call signature doesn't match given arguments: {type(args).__name__}",
+                               None,
+                               None,
+                               f"expected: {type(sign.expects).__name__}")
+
+    def call_lower(self, args: _ARGS, req: Request) -> _VALUE:
         """
         lower(x): the string x converted to lower case
         :param args: exactly one argument, which must resolve to a string
         :param req: request being checked
         :return: lower-cased string
         """
-        ...
+        self._signature_assert(args, _LOWER_SIGNATURE)
+        return_type = _LOWER_SIGNATURE.returns.value
+        string = args[0].value
+        return return_type(string.lower())
 
-    def call_len(self, args: Tuple[Operand, ...], req: Request) -> _VALUE:
+    def call_len(self, args: _ARGS, req: Request) -> _VALUE:
         """
         len(x): the length of x
         :param args: exactly one argument, which must resolve to a sized value (string, list, dict)
         :param req: request being checked
         :return: the length as a number
         """
-        ...
+        self._signature_assert(args, _LEN_SIGNATURE)
+        return_type = _LEN_SIGNATURE.returns.value
+        sized = args[0]
+        if isinstance(sized, String):
+            return return_type(len(sized.value))
+        elif isinstance(sized, ListLit):
+            return return_type(len(sized.values))
+        else:
+            return return_type(len(sized))
 
-    def call_exists(self, args: Tuple[Operand, ...], req: Request) -> _VALUE:
+    def call_exists(self, args: _ARGS, req: Request) -> _VALUE:
         """
         exists(x): checks that x is present in the request
         :param args: exactly one argument (usually a field or a header call)
         :param req: request being checked
         :return: boolean literal, True if the value is present
         """
-        ...
+        self._signature_assert(args, _EXISTS_SIGNATURE)
+        return_type = _EXISTS_SIGNATURE.returns.value
+        key = args[1].value
+        exists = args[0].__contains__(key)
+        return return_type(exists)
 
-    def call_int(self, args: Tuple[Operand, ...], req: Request) -> _VALUE:
+    def call_int(self, args: _ARGS, req: Request) -> _VALUE:
         """
         int(x): the value x converted to an integer
         :param args: exactly one argument, which must be convertible to int
         :param req: request being checked
         :return: the integer as a number
         """
-        ...
+        self._signature_assert(args, _INT_SIGNATURE)
+        return_type = _INT_SIGNATURE.returns.value
+        converted = int(args[0].value)
+        return return_type(converted)
 
-    def call_header(self, args: Tuple[Operand, ...], req: Request) -> _VALUE:
+    def call_header(self, args: _ARGS, req: Request) -> _VALUE:
         """
         header(name): the value of the request header with the given name
         :param args: exactly one argument, the header name as a string
