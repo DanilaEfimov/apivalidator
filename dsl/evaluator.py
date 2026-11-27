@@ -1,3 +1,5 @@
+from re import PatternError
+
 import regex
 from dataclasses import dataclass, field
 from enum import Enum
@@ -431,9 +433,11 @@ class Operating:
         """
         try:
             pattern = regex.compile(right.value)
-            return Bool(pattern.match(left.value) is not None)
-        except regex.PatternError as e:
+            return Bool(pattern.match(left.value, timeout=1000) is not None)
+        except PatternError:
             raise DslComparisonError(f"invalid regular expression: {right.value}") from None
+        except TimeoutError:
+            raise DslComparisonError(f"reached regex timeout with argumets: value='{left.value}', pattern='{right.value}')")
 
     @staticmethod
     def operate(left: _VALUE, op: AllowedOperator, right: _VALUE) -> Bool:
