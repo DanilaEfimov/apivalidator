@@ -4,6 +4,7 @@ from enum import Enum
 from typing import Dict, Any, List, Optional, Union, Tuple, Mapping
 from apivalidator.dsl.dslast import *
 from apivalidator.dsl.grammar import AllowedComp, AllowedOperator, AllowedFunc, AllowedField
+from apivalidator.dsl.limits import *
 
 
 class Missing:
@@ -506,6 +507,7 @@ class Resolver:
         """
         return tuple(self.resolve_unary(Comparison(operand), req) for operand in operands)
 
+    @with_limits
     def resolve_call(self, call: Call, req: Request) -> _VALUE:
         """
         resolves a function call by dispatching on the function name
@@ -732,6 +734,7 @@ class Evaluator:
         else:
             return self.resolver.resolve_binary(comp, req)
 
+    @with_limits
     def resolve_expression(self, expr: Expr, req: Request) -> Verdict:
         """
         evaluates any expression node by dispatching on its type
