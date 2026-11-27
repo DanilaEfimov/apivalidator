@@ -39,7 +39,6 @@ class AllowedField(Enum):
     PATH="path"
     QUERY="query"
     BODY="body"
-    HEADERS="headers"
 
 
 class AllowedOperator(Enum):

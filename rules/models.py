@@ -1,9 +1,19 @@
 from dataclasses import dataclass
 from typing import List, Callable, Dict, Any
 from enum import Enum
+from urllib.request import Request
 from abc import abstractmethod
 
-from apivalidator.dsl.grammar import AllowedField
+
+class RequestFields(Enum):
+    """
+    allowed request fields
+    """
+    METHOD = "method"
+    PATH = "path"
+    QUERY = "query"
+    HEADERS = "headers"
+    BODY = "body"
 
 
 @dataclass(frozen=True)
@@ -205,7 +215,7 @@ if __name__ == "__main__":
     # inspector -> turns details into a human-readable message (only on failure)
     def method_is(expected: str) -> Predicate:
         def checker(req: Request) -> Check:
-            actual = req.r.get(AllowedField.METHOD.value)
+            actual = req.r.get(RequestFields.METHOD.value)
             ok = actual == expected
             return Check(Severity.OK if ok else Severity.ERROR,
                          {"expected": expected, "actual": actual})
@@ -218,7 +228,7 @@ if __name__ == "__main__":
 
     def header_present(name: str) -> Predicate:
         def checker(req: Request) -> Check:
-            headers = req.r.get(AllowedField.HEADERS.value, {})
+            headers = req.r.get(RequestFields.HEADERS.value, {})
             ok = name.lower() in {h.lower() for h in headers}  # headers are case-insensitive
             return Check(Severity.OK if ok else Severity.ERROR, {"header": name})
 
@@ -249,14 +259,14 @@ if __name__ == "__main__":
 
     # --- 4. Requests are plain dicts wrapped in Request ---------------------
     good = Request({
-        AllowedField.METHOD.value: "POST",
-        AllowedField.PATH.value: "/orders",
-        AllowedField.HEADERS.value: {"Idempotency-Key": "7f3a", "X-Signature": "sha256=ab12"},
+        RequestFields.METHOD.value: "POST",
+        RequestFields.PATH.value: "/orders",
+        RequestFields.HEADERS.value: {"Idempotency-Key": "7f3a", "X-Signature": "sha256=ab12"},
     })
     bad = Request({
-        AllowedField.METHOD.value: "POST",
-        AllowedField.PATH.value: "/orders",
-        AllowedField.HEADERS.value: {},
+        RequestFields.METHOD.value: "POST",
+        RequestFields.PATH.value: "/orders",
+        RequestFields.HEADERS.value: {},
     })
 
     for label, req in (("good", good), ("bad", bad)):
